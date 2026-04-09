@@ -212,3 +212,53 @@ class RandomISONoise(object):
             return Image.fromarray(img_np)
         return img_np
 
+
+class RandomBackgroundBlur(object):
+    """ Simulates shallow depth of field (bokeh) to reduce background interference.
+    Maintains a sharp center (where the subject usually is in a ReID bbox)
+    and heavily blurs the periphery (where the background typically is).
+    """
+    def __init__(self, probability=0.5, blur_kernel=(15, 25)):
+        self.probability = probability
+        self.blur_kernel = blur_kernel
+
+    def __call__(self, img):
+        import random, cv2, numpy as np
+        if random.uniform(0, 1) >= self.probability:
+            return img
+            
+        is_pil = isinstance(img, Image.Image)
+        img_np = np.array(img).astype(np.float32) if is_pil else img.astype(np.float32)
+        h, w = img_np.shape[:2]
+        
+        # Determine a random heavy blur kernel
+        k = random.choice(range(self.blur_kernel[0], self.blur_kernel[1]+1, 2))
+        blurred_img = cv2.GaussianBlur(img_np, (k, k), 0)
+        
+        # Create an elliptical mask for the center
+        cx = w / 2 + random.uniform(-w*0.1, w*0.1)
+        cy = h / 2 + random.uniform(-h*0.1, h*0.1)
+        
+        rx = w * random.uniform(0.35, 0.5)
+        ry = h * random.uniform(0.35, 0.5)
+        
+        x = np.arange(0, w)
+        y = np.arange(0, h)
+        xx, yy = np.meshgrid(x, y)
+        
+        dist = ((xx - cx) / rx)**2 + ((yy - cy) / ry)**2
+        
+        # Smooth gaussian mask: 1.0 at center, decays to 0.0 towards edges
+        mask = np.exp(-dist * 1.5)
+        
+        if len(img_np.shape) == 3:
+            mask = np.expand_dims(mask, axis=-1)
+            
+        # Blend
+        result = img_np * mask + blurred_img * (1.0 - mask)
+        result = np.clip(result, 0, 255).astype(np.uint8)
+        
+        if is_pil:
+            return Image.fromarray(result)
+        return result
+

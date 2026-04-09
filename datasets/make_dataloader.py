@@ -7,7 +7,7 @@ from timm.data.random_erasing import RandomErasing
 from .sampler import RandomIdentitySampler
 from .sampler_ddp import RandomIdentitySampler_DDP
 from .ballshow import BallShow
-from .preprocessing import RandomMotionBlur, RandomDirectionalLighting, RandomColorTemperature, RandomISONoise
+from .preprocessing import RandomMotionBlur, RandomDirectionalLighting, RandomColorTemperature, RandomISONoise, RandomBackgroundBlur
 
 __factory = {
     'ballshow': BallShow,
@@ -50,6 +50,10 @@ def make_dataloader(cfg):
         train_transforms_list.append(RandomMotionBlur(probability=cfg.INPUT.MB_PROB))
         if hasattr(T, 'GaussianBlur'):
             train_transforms_list.append(T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=cfg.INPUT.MB_PROB * 0.5))
+
+    # Background Blur / Depth of Field simulation
+    if hasattr(cfg.INPUT, 'MB_PROB') and cfg.INPUT.MB_PROB > 0:
+        train_transforms_list.append(RandomBackgroundBlur(probability=cfg.INPUT.MB_PROB * 0.5))
 
     train_transforms_list.extend([
         T.ToTensor(),
