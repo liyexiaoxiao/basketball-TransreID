@@ -80,6 +80,10 @@ _C.INPUT.SIZE_TEST = [384, 128]
 _C.INPUT.PROB = 0.5
 # Random probability for random erasing
 _C.INPUT.RE_PROB = 0.5
+# Random probability for color jitter (environmental changes)
+_C.INPUT.CJ_PROB = 0.5
+# Random probability for motion blur
+_C.INPUT.MB_PROB = 0.5
 # Values to be used for image normalization
 _C.INPUT.PIXEL_MEAN = [0.485, 0.456, 0.406]
 # Values to be used for image normalization

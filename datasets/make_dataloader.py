@@ -7,6 +7,7 @@ from timm.data.random_erasing import RandomErasing
 from .sampler import RandomIdentitySampler
 from .sampler_ddp import RandomIdentitySampler_DDP
 from .ballshow import BallShow
+from .preprocessing import RandomMotionBlur, RandomDirectionalLighting
 
 __factory = {
     'ballshow': BallShow,
@@ -29,16 +30,30 @@ def val_collate_fn(batch):
     return torch.stack(imgs, dim=0), pids, camids, camids_batch, viewids, img_paths
 
 def make_dataloader(cfg):
-    train_transforms = T.Compose([
-            T.Resize(cfg.INPUT.SIZE_TRAIN, interpolation=3),
-            T.RandomHorizontalFlip(p=cfg.INPUT.PROB),
-            T.Pad(cfg.INPUT.PADDING),
-            T.RandomCrop(cfg.INPUT.SIZE_TRAIN),
-            T.ToTensor(),
-            T.Normalize(mean=cfg.INPUT.PIXEL_MEAN, std=cfg.INPUT.PIXEL_STD),
-            RandomErasing(probability=cfg.INPUT.RE_PROB, mode='pixel', max_count=1, device='cpu'),
-            # RandomErasing(probability=cfg.INPUT.RE_PROB, mean=cfg.INPUT.PIXEL_MEAN)
-        ])
+    train_transforms_list = [
+        T.Resize(cfg.INPUT.SIZE_TRAIN, interpolation=3),
+        T.RandomHorizontalFlip(p=cfg.INPUT.PROB),
+        T.Pad(cfg.INPUT.PADDING),
+        T.RandomCrop(cfg.INPUT.SIZE_TRAIN),
+    ]
+
+    # Environmental changes: Color Jitter / Random Directional Lighting
+    if hasattr(cfg.INPUT, 'CJ_PROB') and cfg.INPUT.CJ_PROB > 0:
+        train_transforms_list.append(T.RandomApply([T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.0)], p=cfg.INPUT.CJ_PROB))
+        train_transforms_list.append(RandomDirectionalLighting(probability=cfg.INPUT.CJ_PROB * 0.5))
+    
+    # Blur: Motion Blur and Defocus Blur (GaussianBlur)
+    if hasattr(cfg.INPUT, 'MB_PROB') and cfg.INPUT.MB_PROB > 0:
+        train_transforms_list.append(RandomMotionBlur(probability=cfg.INPUT.MB_PROB))
+        if hasattr(T, 'GaussianBlur'):
+            train_transforms_list.append(T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=cfg.INPUT.MB_PROB * 0.5))
+
+    train_transforms_list.extend([
+        T.ToTensor(),
+        T.Normalize(mean=cfg.INPUT.PIXEL_MEAN, std=cfg.INPUT.PIXEL_STD),
+        RandomErasing(probability=cfg.INPUT.RE_PROB, mode='pixel', max_count=1, device='cpu'),
+    ])
+    train_transforms = T.Compose(train_transforms_list)
 
     val_transforms = T.Compose([
         T.Resize(cfg.INPUT.SIZE_TEST),
