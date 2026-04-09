@@ -153,3 +153,62 @@ class RandomDirectionalLighting(object):
         if is_pil:
             return Image.fromarray(img_np)
         return img_np
+
+class RandomColorTemperature(object):
+    """ Simulates indoor vs outdoor lighting by randomly shifting color temperature (warm vs cold).
+    Indoor lights (halogen/sodium) are warm (orange/yellow).
+    Outdoor lights (daylight) are cold (blue/white).
+    """
+    def __init__(self, probability=0.5, shift_range=30):
+        self.probability = probability
+        self.shift_range = shift_range
+
+    def __call__(self, img):
+        import random, numpy as np
+        if random.uniform(0, 1) >= self.probability:
+            return img
+            
+        is_pil = isinstance(img, Image.Image)
+        img_np = np.array(img).astype(np.float32) if is_pil else img.astype(np.float32)
+        
+        if len(img_np.shape) != 3 or img_np.shape[2] != 3:
+            return img # Only apply to RGB
+
+        # Shift: positive means warmer (more R, less B), negative means cooler (less R, more B)
+        shift = random.uniform(-self.shift_range, self.shift_range)
+        
+        img_np[:, :, 0] += shift # Red
+        img_np[:, :, 2] -= shift # Blue
+        
+        img_np = np.clip(img_np, 0, 255).astype(np.uint8)
+        
+        if is_pil:
+            return Image.fromarray(img_np)
+        return img_np
+
+
+class RandomISONoise(object):
+    """ Simulates high ISO noise often seen in indoor sports photography due to low light and high shutter speeds.
+    """
+    def __init__(self, probability=0.5, intensity_range=(10.0, 25.0)):
+        self.probability = probability
+        self.intensity_range = intensity_range
+
+    def __call__(self, img):
+        import random, numpy as np
+        if random.uniform(0, 1) >= self.probability:
+            return img
+            
+        is_pil = isinstance(img, Image.Image)
+        img_np = np.array(img).astype(np.float32) if is_pil else img.astype(np.float32)
+        
+        sigma = random.uniform(self.intensity_range[0], self.intensity_range[1])
+        noise = np.random.normal(0, sigma, img_np.shape)
+        
+        img_np = img_np + noise
+        img_np = np.clip(img_np, 0, 255).astype(np.uint8)
+        
+        if is_pil:
+            return Image.fromarray(img_np)
+        return img_np
+

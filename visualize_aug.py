@@ -8,7 +8,7 @@ import torchvision.transforms as T
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from datasets.preprocessing import RandomMotionBlur, RandomDirectionalLighting
+from datasets.preprocessing import RandomMotionBlur, RandomDirectionalLighting, RandomColorTemperature, RandomISONoise
 
 def visualize_augmentations():
     data_dir = 'data/BallShow/bounding_box_train'
@@ -22,28 +22,26 @@ def visualize_augmentations():
         return
         
     # Get a random image
-    # We will pick the first one basically or random
     img_path = os.path.join(data_dir, random.choice(img_names))
     orig_img = Image.open(img_path).convert('RGB')
     
-    # Initialize our transforms with Probability = 1.0 so we ALWAYS see the effect
+    # Initialize our transforms with Probability = 1.0
     lighting_aug = RandomDirectionalLighting(probability=1.0, intensity_range=(0.4, 0.8))
     motion_blur_aug = RandomMotionBlur(probability=1.0, kernel_sizes=[9, 11, 15], angle_range=(0, 360))
-    color_jitter_aug = T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.0)
-    gaussian_blur_aug = T.GaussianBlur(kernel_size=5, sigma=(1.0, 2.0))
+    color_temp_aug = RandomColorTemperature(probability=1.0, shift_range=40)
+    iso_noise_aug = RandomISONoise(probability=1.0, intensity_range=(20.0, 35.0))
     
     print(f"Processing image: {img_path}")
     
     # Apply augmentations (generate different versions)
     img_lighting = lighting_aug(orig_img)
     img_motion_blur = motion_blur_aug(orig_img)
-    img_color_jitter = color_jitter_aug(orig_img)
-    # T.GaussianBlur doesn't have probability parameter, it's just applied directly
-    img_gaussian_blur = gaussian_blur_aug(orig_img)
+    img_color_temp = color_temp_aug(orig_img)
+    img_iso_noise = iso_noise_aug(orig_img)
 
-    # We will also create a "Combined Enhanced" which might look crazy but shows the max capability
-    # Let's just combine Lighting + Motion Blur
-    img_combined = motion_blur_aug(lighting_aug(orig_img))
+    # Combined Enhanced for extreme simulation
+    # Noise + Motion Blur + Color Temp
+    img_combined = motion_blur_aug(iso_noise_aug(color_temp_aug(orig_img)))
 
     # Plot everything
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
@@ -53,9 +51,9 @@ def visualize_augmentations():
         ("Original", orig_img),
         ("Directional Lighting", img_lighting),
         ("Motion Blur (Linear PSF)", img_motion_blur),
-        ("Color Jitter", img_color_jitter),
-        ("Gaussian Blur (Defocus)", img_gaussian_blur),
-        ("Combined (Lighting + Motion)", img_combined)
+        ("Color Temp (Indoor/Outdoor)", img_color_temp),
+        ("ISO Noise (Low Light)", img_iso_noise),
+        ("Combined (Temp+Noise+Motion)", img_combined)
     ]
     
     for ax, (title, img) in zip(axes, images):

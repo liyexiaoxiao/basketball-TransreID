@@ -7,7 +7,7 @@ from timm.data.random_erasing import RandomErasing
 from .sampler import RandomIdentitySampler
 from .sampler_ddp import RandomIdentitySampler_DDP
 from .ballshow import BallShow
-from .preprocessing import RandomMotionBlur, RandomDirectionalLighting
+from .preprocessing import RandomMotionBlur, RandomDirectionalLighting, RandomColorTemperature, RandomISONoise
 
 __factory = {
     'ballshow': BallShow,
@@ -37,10 +37,13 @@ def make_dataloader(cfg):
         T.RandomCrop(cfg.INPUT.SIZE_TRAIN),
     ]
 
-    # Environmental changes: Color Jitter / Random Directional Lighting
+    # Environmental changes: Color Jitter / Random Directional Lighting / Indoor-Outdoor Specifics
     if hasattr(cfg.INPUT, 'CJ_PROB') and cfg.INPUT.CJ_PROB > 0:
         train_transforms_list.append(T.RandomApply([T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.0)], p=cfg.INPUT.CJ_PROB))
         train_transforms_list.append(RandomDirectionalLighting(probability=cfg.INPUT.CJ_PROB * 0.5))
+        # Add indoor/outdoor specific transforms
+        train_transforms_list.append(RandomColorTemperature(probability=cfg.INPUT.CJ_PROB * 0.5, shift_range=30))
+        train_transforms_list.append(RandomISONoise(probability=cfg.INPUT.CJ_PROB * 0.5, intensity_range=(10.0, 25.0)))
     
     # Blur: Motion Blur and Defocus Blur (GaussianBlur)
     if hasattr(cfg.INPUT, 'MB_PROB') and cfg.INPUT.MB_PROB > 0:
