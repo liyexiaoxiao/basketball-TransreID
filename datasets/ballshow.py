@@ -7,8 +7,8 @@ class BallShow(BaseImageDataset):
     """
     自定义数据集加载类
     """
-    # 这里对应 data/ 下的文件夹名称
-    dataset_dir = 'BallShow'
+    # 这里对应 data/ 下的文件夹名称，置为空以直接使用 config 传进来的 root (如 ./data/BallShow)
+    dataset_dir = ''
 
     def __init__(self, root='', verbose=True, pid_begin=0, **kwargs):
         super(BallShow, self).__init__()
