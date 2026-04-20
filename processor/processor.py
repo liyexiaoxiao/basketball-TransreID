@@ -154,12 +154,19 @@ def do_inference(cfg,
     model.eval()
     img_path_list = []
 
+    logger.info("Using Test-Time Augmentation (horizontal flip)")
+
     for n_iter, (img, pid, camid, camids, target_view, imgpath) in enumerate(val_loader):
         with torch.no_grad():
             img = img.to(device)
             camids = camids.to(device)
             target_view = target_view.to(device)
+            # Original features
             feat = model(img, cam_label=camids, view_label=target_view)
+            # Horizontally flipped features (TTA)
+            feat_flip = model(torch.flip(img, dims=[3]), cam_label=camids, view_label=target_view)
+            # Average original and flipped features
+            feat = (feat + feat_flip) / 2.0
             evaluator.update((feat, pid, camid))
             img_path_list.extend(imgpath)
 
