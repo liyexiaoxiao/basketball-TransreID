@@ -40,25 +40,27 @@ def make_dataloader(cfg):
     # Environmental changes: Color Jitter / Random Directional Lighting / Indoor-Outdoor Specifics
     if hasattr(cfg.INPUT, 'CJ_PROB') and cfg.INPUT.CJ_PROB > 0:
         train_transforms_list.append(T.RandomApply([T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.0)], p=cfg.INPUT.CJ_PROB))
-        train_transforms_list.append(RandomDirectionalLighting(probability=cfg.INPUT.CJ_PROB * 0.5))
+        train_transforms_list.append(RandomDirectionalLighting(probability=cfg.INPUT.CJ_PROB * 0.25))
         # Add indoor/outdoor specific transforms
-        train_transforms_list.append(RandomColorTemperature(probability=cfg.INPUT.CJ_PROB * 0.5, shift_range=30))
-        train_transforms_list.append(RandomISONoise(probability=cfg.INPUT.CJ_PROB * 0.5, intensity_range=(10.0, 25.0)))
+        train_transforms_list.append(RandomColorTemperature(probability=cfg.INPUT.CJ_PROB * 0.25, shift_range=30))
+        train_transforms_list.append(RandomISONoise(probability=cfg.INPUT.CJ_PROB * 0.25, intensity_range=(10.0, 25.0)))
     
     # Blur: Motion Blur and Defocus Blur (GaussianBlur)
     if hasattr(cfg.INPUT, 'MB_PROB') and cfg.INPUT.MB_PROB > 0:
-        train_transforms_list.append(RandomMotionBlur(probability=cfg.INPUT.MB_PROB))
+        val_mb = cfg.INPUT.MB_PROB * 0.5
+        train_transforms_list.append(RandomMotionBlur(probability=val_mb))
         if hasattr(T, 'GaussianBlur'):
-            train_transforms_list.append(T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=cfg.INPUT.MB_PROB * 0.5))
+            train_transforms_list.append(T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=val_mb * 0.5))
 
     # Background Blur / Depth of Field simulation
     if hasattr(cfg.INPUT, 'MB_PROB') and cfg.INPUT.MB_PROB > 0:
-        train_transforms_list.append(RandomBackgroundBlur(probability=cfg.INPUT.MB_PROB * 0.5))
+        train_transforms_list.append(RandomBackgroundBlur(probability=cfg.INPUT.MB_PROB * 0.25))
 
     train_transforms_list.extend([
         T.ToTensor(),
         T.Normalize(mean=cfg.INPUT.PIXEL_MEAN, std=cfg.INPUT.PIXEL_STD),
-        RandomErasing(probability=cfg.INPUT.RE_PROB, mode='pixel', max_count=1, device='cpu'),
+        # Use heavy random erasing to simulate occlusion! max_count=3 means multiple blocks get erased
+        RandomErasing(probability=cfg.INPUT.RE_PROB, mode='pixel', max_count=3, device='cpu'),
     ])
     train_transforms = T.Compose(train_transforms_list)
 
