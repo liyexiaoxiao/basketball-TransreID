@@ -174,8 +174,10 @@ def do_inference(cfg,
             target_view = target_view.to(device)
             # Original features
             feat = model(img, cam_label=camids, view_label=target_view)
+            feat = torch.nn.functional.normalize(feat, dim=1, p=2)
             # Horizontally flipped features (TTA)
             feat_flip = model(torch.flip(img, dims=[3]), cam_label=camids, view_label=target_view)
+            feat_flip = torch.nn.functional.normalize(feat_flip, dim=1, p=2)
             # Average original and flipped features
             feat = (feat + feat_flip) / 2.0
             evaluator.update((feat, pid, camid))
