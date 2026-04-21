@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from utils.meter import AverageMeter
 from utils.metrics import R1_mAP_eval
+from utils.ema import ModelEMA
 from torch.cuda import amp
 import torch.distributed as dist
 
@@ -39,6 +40,9 @@ def do_train(cfg,
 
     evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
     scaler = amp.GradScaler()
+    # Initialize EMA model
+    ema_model = ModelEMA(model, decay=0.9998)
+    logger.info('Using EMA with decay=0.9998')
     # train
     for epoch in range(1, epochs + 1):
         start_time = time.time()
@@ -62,6 +66,7 @@ def do_train(cfg,
 
             scaler.step(optimizer)
             scaler.update()
+            ema_model.update(model)
 
             if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
                 for param in center_criterion.parameters():
@@ -95,9 +100,14 @@ def do_train(cfg,
                 if dist.get_rank() == 0:
                     torch.save(model.state_dict(),
                                os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_{}.pth'.format(epoch)))
+                    torch.save(ema_model.state_dict(),
+                               os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_ema_{}.pth'.format(epoch)))
             else:
                 torch.save(model.state_dict(),
                            os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_{}.pth'.format(epoch)))
+                torch.save(ema_model.state_dict(),
+                           os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_ema_{}.pth'.format(epoch)))
+                logger.info('Saved EMA model: {}'.format(cfg.MODEL.NAME + '_ema_{}.pth'.format(epoch)))
 
         if epoch % eval_period == 0:
             if cfg.MODEL.DIST_TRAIN:
@@ -117,16 +127,17 @@ def do_train(cfg,
                         logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
                     torch.cuda.empty_cache()
             else:
-                model.eval()
+                # Evaluate with EMA model for better results
+                ema_model.ema.eval()
                 for n_iter, (img, vid, camid, camids, target_view, _) in enumerate(val_loader):
                     with torch.no_grad():
                         img = img.to(device)
                         camids = camids.to(device)
                         target_view = target_view.to(device)
-                        feat = model(img, cam_label=camids, view_label=target_view)
+                        feat = ema_model.ema(img, cam_label=camids, view_label=target_view)
                         evaluator.update((feat, vid, camid))
                 cmc, mAP, _, _, _, _, _ = evaluator.compute()
-                logger.info("Validation Results - Epoch: {}".format(epoch))
+                logger.info("EMA Validation Results - Epoch: {}".format(epoch))
                 logger.info("mAP: {:.1%}".format(mAP))
                 for r in [1, 5, 10]:
                     logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
