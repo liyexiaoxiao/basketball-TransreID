@@ -364,11 +364,20 @@ class build_transformer_local(nn.Module):
                             local_feat_4]  # global feature for triplet loss
         else:
             if self.neck_feat == 'after':
-                return torch.cat(
-                    [feat, local_feat_1_bn / 4, local_feat_2_bn / 4, local_feat_3_bn / 4, local_feat_4_bn / 4], dim=1)
+                # Independent L2-norm maximizes multi-branch complementarity
+                feat_n = torch.nn.functional.normalize(feat, dim=1, p=2)
+                l1_n = torch.nn.functional.normalize(local_feat_1_bn, dim=1, p=2)
+                l2_n = torch.nn.functional.normalize(local_feat_2_bn, dim=1, p=2)
+                l3_n = torch.nn.functional.normalize(local_feat_3_bn, dim=1, p=2)
+                l4_n = torch.nn.functional.normalize(local_feat_4_bn, dim=1, p=2)
+                return torch.cat([feat_n, l1_n, l2_n, l3_n, l4_n], dim=1)
             else:
-                return torch.cat(
-                    [global_feat, local_feat_1 / 4, local_feat_2 / 4, local_feat_3 / 4, local_feat_4 / 4], dim=1)
+                feat_n = torch.nn.functional.normalize(global_feat, dim=1, p=2)
+                l1_n = torch.nn.functional.normalize(local_feat_1, dim=1, p=2)
+                l2_n = torch.nn.functional.normalize(local_feat_2, dim=1, p=2)
+                l3_n = torch.nn.functional.normalize(local_feat_3, dim=1, p=2)
+                l4_n = torch.nn.functional.normalize(local_feat_4, dim=1, p=2)
+                return torch.cat([feat_n, l1_n, l2_n, l3_n, l4_n], dim=1)
 
     def load_param(self, trained_path):
         param_dict = torch.load(trained_path)
