@@ -50,10 +50,12 @@ def extract_features_with_tta(model, val_loader, device):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ReID Ensemble Test")
     parser.add_argument("--config_file", default="", type=str)
-    parser.add_argument("--weights", nargs='+', required=True,
-                        help="List of model weight paths to ensemble")
+    parser.add_argument("--weights", required=True, type=str,
+                        help="Comma-separated list of model weight paths, e.g. path1.pth,path2.pth")
     parser.add_argument("opts", default=None, nargs=argparse.REMAINDER)
     args = parser.parse_args()
+
+    weight_list = [w.strip() for w in args.weights.split(',')]
 
     if args.config_file != "":
         cfg.merge_from_file(args.config_file)
@@ -65,7 +67,7 @@ if __name__ == "__main__":
         os.makedirs(output_dir)
 
     logger = setup_logger("transreid", output_dir, if_train=False)
-    logger.info("Ensemble test with {} models".format(len(args.weights)))
+    logger.info("Ensemble test with {} models".format(len(weight_list)))
 
     os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
     device = "cuda"
@@ -74,7 +76,7 @@ if __name__ == "__main__":
 
     # Extract features from each model
     all_feats = []
-    for i, weight_path in enumerate(args.weights):
+    for i, weight_path in enumerate(weight_list):
         logger.info("Loading model {}: {}".format(i + 1, weight_path))
         model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
         model.load_param(weight_path)
