@@ -36,6 +36,29 @@ def make_loss(cfg, num_classes):    # modified by gu
     elif cfg.DATALOADER.SAMPLER == 'softmax_triplet':
         def loss_func(score, feat, target, target_cam):
             if cfg.MODEL.METRIC_LOSS_TYPE == 'triplet':
+                def compute_id_loss(logits):
+                    if cfg.MODEL.IF_LABELSMOOTH == 'on':
+                        return xent(logits, target)
+                    return F.cross_entropy(logits, target)
+
+                def compute_triplet_loss(features):
+                    return triplet(features, target)[0]
+
+                if cfg.MODEL.GLOBAL_LOCAL_FUSION.ENABLED and isinstance(score, list) and isinstance(feat, list):
+                    id_loss = compute_id_loss(score[0])
+                    if len(score) > 1:
+                        aux_id_losses = [compute_id_loss(branch_score) for branch_score in score[1:]]
+                        id_loss = id_loss + cfg.MODEL.GLOBAL_LOCAL_FUSION.AUX_ID_WEIGHT * sum(aux_id_losses) / len(aux_id_losses)
+
+                    tri_loss = compute_triplet_loss(feat[0])
+                    if len(feat) > 1:
+                        tri_loss = tri_loss + cfg.MODEL.GLOBAL_LOCAL_FUSION.GLOBAL_TRIPLET_WEIGHT * compute_triplet_loss(feat[1])
+                    if len(feat) > 2:
+                        local_tri_losses = [compute_triplet_loss(local_feat) for local_feat in feat[2:]]
+                        tri_loss = tri_loss + cfg.MODEL.GLOBAL_LOCAL_FUSION.LOCAL_TRIPLET_WEIGHT * sum(local_tri_losses)
+
+                    return cfg.MODEL.ID_LOSS_WEIGHT * id_loss + cfg.MODEL.TRIPLET_LOSS_WEIGHT * tri_loss
+
                 if cfg.MODEL.IF_LABELSMOOTH == 'on':
                     if isinstance(score, list):
                         ID_LOSS = [xent(scor, target) for scor in score[1:]]
@@ -78,5 +101,4 @@ def make_loss(cfg, num_classes):    # modified by gu
         print('expected sampler should be softmax, triplet, softmax_triplet or softmax_triplet_center'
               'but got {}'.format(cfg.DATALOADER.SAMPLER))
     return loss_func, center_criterion
-
 

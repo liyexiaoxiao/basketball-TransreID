@@ -372,7 +372,7 @@ class TransReID(nn.Module):
         self.num_classes = num_classes
         self.fc = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
-    def forward_features(self, x, camera_id, view_id):
+    def _forward_tokens(self, x, camera_id, view_id, local_feature=False):
         B = x.shape[0]
         x = self.patch_embed(x)
 
@@ -390,18 +390,25 @@ class TransReID(nn.Module):
 
         x = self.pos_drop(x)
 
-        if self.local_feature:
+        if local_feature:
             for blk in self.blocks[:-1]:
                 x = blk(x)
             return x
 
-        else:
-            for blk in self.blocks:
-                x = blk(x)
+        for blk in self.blocks:
+            x = blk(x)
 
-            x = self.norm(x)
+        x = self.norm(x)
+        return x
 
-            return x[:, 0]
+    def forward_features(self, x, camera_id, view_id):
+        x = self._forward_tokens(x, camera_id, view_id, local_feature=self.local_feature)
+        if self.local_feature:
+            return x
+        return x[:, 0]
+
+    def forward_token_features(self, x, camera_id, view_id):
+        return self._forward_tokens(x, camera_id, view_id, local_feature=False)
 
     def forward(self, x, cam_label=None, view_label=None):
         x = self.forward_features(x, cam_label, view_label)

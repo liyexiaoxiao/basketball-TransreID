@@ -3,7 +3,7 @@ import torchvision.transforms as T
 from torch.utils.data import DataLoader
 
 from .bases import ImageDataset
-from timm.data.random_erasing import RandomErasing
+from .preprocessing import BasketballStructuredOcclusion
 from .sampler import RandomIdentitySampler
 from .sampler_ddp import RandomIdentitySampler_DDP
 from .ballshow import BallShow
@@ -29,16 +29,36 @@ def val_collate_fn(batch):
     return torch.stack(imgs, dim=0), pids, camids, camids_batch, viewids, img_paths
 
 def make_dataloader(cfg):
-    train_transforms = T.Compose([
-            T.Resize(cfg.INPUT.SIZE_TRAIN, interpolation=3),
-            T.RandomHorizontalFlip(p=cfg.INPUT.PROB),
-            T.Pad(cfg.INPUT.PADDING),
-            T.RandomCrop(cfg.INPUT.SIZE_TRAIN),
-            T.ToTensor(),
-            T.Normalize(mean=cfg.INPUT.PIXEL_MEAN, std=cfg.INPUT.PIXEL_STD),
-            RandomErasing(probability=cfg.INPUT.RE_PROB, mode='pixel', max_count=1, device='cpu'),
-            # RandomErasing(probability=cfg.INPUT.RE_PROB, mean=cfg.INPUT.PIXEL_MEAN)
-        ])
+    train_transform_ops = [
+        T.Resize(cfg.INPUT.SIZE_TRAIN, interpolation=3),
+        T.RandomHorizontalFlip(p=cfg.INPUT.PROB),
+        T.Pad(cfg.INPUT.PADDING),
+        T.RandomCrop(cfg.INPUT.SIZE_TRAIN),
+    ]
+
+    if cfg.INPUT.BASKETBALL_OCCLUSION.ENABLED:
+        train_transform_ops.append(
+            BasketballStructuredOcclusion(
+                probability=cfg.INPUT.BASKETBALL_OCCLUSION.PROB,
+            )
+        )
+
+    train_transform_ops.extend([
+        T.ToTensor(),
+        T.Normalize(mean=cfg.INPUT.PIXEL_MEAN, std=cfg.INPUT.PIXEL_STD),
+    ])
+
+    if cfg.INPUT.RANDOM_ERASING.ENABLED:
+        train_transform_ops.append(
+            T.RandomErasing(
+                p=cfg.INPUT.RE_PROB,
+                scale=(0.02, 0.10),
+                ratio=(0.5, 2.0),
+                value='random',
+            )
+        )
+
+    train_transforms = T.Compose(train_transform_ops)
 
     val_transforms = T.Compose([
         T.Resize(cfg.INPUT.SIZE_TEST),

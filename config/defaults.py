@@ -63,6 +63,15 @@ _C.MODEL.SHUFFLE_GROUP = 2
 _C.MODEL.DEVIDE_LENGTH = 4
 _C.MODEL.RE_ARRANGE = True
 
+# Global + local fusion branch for non-JPM transformer models
+_C.MODEL.GLOBAL_LOCAL_FUSION = CN()
+_C.MODEL.GLOBAL_LOCAL_FUSION.ENABLED = False
+_C.MODEL.GLOBAL_LOCAL_FUSION.NUM_PARTS = 3
+_C.MODEL.GLOBAL_LOCAL_FUSION.REDUCE_DIM = 256
+_C.MODEL.GLOBAL_LOCAL_FUSION.GLOBAL_TRIPLET_WEIGHT = 0.2
+_C.MODEL.GLOBAL_LOCAL_FUSION.LOCAL_TRIPLET_WEIGHT = 0.05
+_C.MODEL.GLOBAL_LOCAL_FUSION.AUX_ID_WEIGHT = 0.2
+
 # SIE Parameter
 _C.MODEL.SIE_COE = 3.0
 _C.MODEL.SIE_CAMERA = False
@@ -79,7 +88,13 @@ _C.INPUT.SIZE_TEST = [384, 128]
 # Random probability for image horizontal flip
 _C.INPUT.PROB = 0.5
 # Random probability for random erasing
-_C.INPUT.RE_PROB = 0.5
+_C.INPUT.RE_PROB = 0.10
+# Switches for training-time occlusion augmentations
+_C.INPUT.BASKETBALL_OCCLUSION = CN()
+_C.INPUT.BASKETBALL_OCCLUSION.ENABLED = False
+_C.INPUT.BASKETBALL_OCCLUSION.PROB = 0.10
+_C.INPUT.RANDOM_ERASING = CN()
+_C.INPUT.RANDOM_ERASING.ENABLED = False
 # Values to be used for image normalization
 _C.INPUT.PIXEL_MEAN = [0.485, 0.456, 0.406]
 # Values to be used for image normalization

@@ -1,6 +1,6 @@
 MODEL:
-  PRETRAIN_CHOICE: 'imagenet'
-  PRETRAIN_PATH: ''
+  PRETRAIN_CHOICE: 'imagenet' 
+  PRETRAIN_PATH: '/root/basketball/jx_vit_base_p16_224-80ecf9dd.pth'
   METRIC_LOSS_TYPE: 'triplet'
   IF_LABELSMOOTH: 'off'
   IF_WITH_CENTER: 'no'
@@ -10,23 +10,36 @@ MODEL:
   TRANSFORMER_TYPE: 'vit_base_patch16_224_TransReID'
   STRIDE_SIZE: [16, 16]
 
+  GLOBAL_LOCAL_FUSION:
+    ENABLED: True
+    NUM_PARTS: 3
+    REDUCE_DIM: 256
+    GLOBAL_TRIPLET_WEIGHT: 0.3
+    LOCAL_TRIPLET_WEIGHT: 0.1
+    AUX_ID_WEIGHT: 0.3
+
 INPUT:
   SIZE_TRAIN: [256, 128]
   SIZE_TEST: [256, 128]
   PROB: 0.5 # random horizontal flip
-  RE_PROB: 0.5 # random erasing
+  RE_PROB: 0.25 # random erasing
+  BASKETBALL_OCCLUSION:
+    ENABLED: True
+    PROB: 0.20
+  RANDOM_ERASING:
+    ENABLED: True
   PADDING: 10
   PIXEL_MEAN: [0.5, 0.5, 0.5]
   PIXEL_STD: [0.5, 0.5, 0.5]
 
 DATASETS:
   NAMES: ('ballshow')
-  ROOT_DIR: ('./data/BallShow')
+  ROOT_DIR: ('/root/autodl-tmp')
 
 DATALOADER:
   SAMPLER: 'softmax_triplet'
   NUM_INSTANCE: 4
-  NUM_WORKERS: 8
+  NUM_WORKERS: 0
 
 SOLVER:
   OPTIMIZER_NAME: 'SGD'
@@ -51,5 +64,3 @@ TEST:
   FEAT_NORM: 'yes'
 
 OUTPUT_DIR: 'logs/BallShow_vit_base'
-
-

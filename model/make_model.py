@@ -3,6 +3,7 @@ import torch.nn as nn
 from .backbones.resnet import ResNet, Bottleneck
 import copy
 from .backbones.vit_pytorch import vit_base_patch16_224_TransReID, vit_small_patch16_224_TransReID, deit_small_patch16_224_TransReID
+from .local_branch import GlobalLocalFusion
 from loss.metric_learning import Arcface, Cosface, AMSoftmax, CircleLoss
 
 def shuffle_unit(features, shift, group, begin=1):
@@ -45,6 +46,28 @@ def weights_init_classifier(m):
         nn.init.normal_(m.weight, std=0.001)
         if m.bias:
             nn.init.constant_(m.bias, 0.0)
+
+
+def build_classifier(feat_dim, num_classes, id_loss_type, cfg):
+    if id_loss_type == 'arcface':
+        return Arcface(feat_dim, num_classes, s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
+    if id_loss_type == 'cosface':
+        return Cosface(feat_dim, num_classes, s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
+    if id_loss_type == 'amsoftmax':
+        return AMSoftmax(feat_dim, num_classes, s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
+    if id_loss_type == 'circle':
+        return CircleLoss(feat_dim, num_classes, s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
+
+    classifier = nn.Linear(feat_dim, num_classes, bias=False)
+    classifier.apply(weights_init_classifier)
+    return classifier
+
+
+def build_bnneck(feat_dim):
+    bottleneck = nn.BatchNorm1d(feat_dim)
+    bottleneck.bias.requires_grad_(False)
+    bottleneck.apply(weights_init_kaiming)
+    return bottleneck
 
 
 class Backbone(nn.Module):
@@ -155,40 +178,89 @@ class build_transformer(nn.Module):
 
         self.num_classes = num_classes
         self.ID_LOSS_TYPE = cfg.MODEL.ID_LOSS_TYPE
-        if self.ID_LOSS_TYPE == 'arcface':
-            print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = Arcface(self.in_planes, self.num_classes,
-                                      s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-        elif self.ID_LOSS_TYPE == 'cosface':
-            print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = Cosface(self.in_planes, self.num_classes,
-                                      s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-        elif self.ID_LOSS_TYPE == 'amsoftmax':
-            print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = AMSoftmax(self.in_planes, self.num_classes,
-                                        s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-        elif self.ID_LOSS_TYPE == 'circle':
+        if self.ID_LOSS_TYPE in ('arcface', 'cosface', 'amsoftmax', 'circle'):
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE, cfg.SOLVER.COSINE_SCALE, cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = CircleLoss(self.in_planes, self.num_classes,
-                                        s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-        else:
-            self.classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
-            self.classifier.apply(weights_init_classifier)
 
-        self.bottleneck = nn.BatchNorm1d(self.in_planes)
-        self.bottleneck.bias.requires_grad_(False)
-        self.bottleneck.apply(weights_init_kaiming)
+        self.use_global_local_fusion = cfg.MODEL.GLOBAL_LOCAL_FUSION.ENABLED
+        self.global_local_num_parts = cfg.MODEL.GLOBAL_LOCAL_FUSION.NUM_PARTS
+        self.global_local_reduce_dim = cfg.MODEL.GLOBAL_LOCAL_FUSION.REDUCE_DIM
+
+        if self.use_global_local_fusion:
+            self.fusion = GlobalLocalFusion(
+                in_channels=self.in_planes,
+                num_parts=self.global_local_num_parts,
+                reduce_dim=self.global_local_reduce_dim
+            )
+            self.classifier = build_classifier(self.fusion.output_dim, self.num_classes, self.ID_LOSS_TYPE, cfg)
+            self.global_classifier = build_classifier(self.in_planes, self.num_classes, self.ID_LOSS_TYPE, cfg)
+            self.local_classifiers = nn.ModuleList([
+                build_classifier(self.global_local_reduce_dim, self.num_classes, self.ID_LOSS_TYPE, cfg)
+                for _ in range(self.global_local_num_parts)
+            ])
+
+            self.bottleneck = build_bnneck(self.fusion.output_dim)
+            self.global_bottleneck = build_bnneck(self.in_planes)
+            self.local_bottlenecks = nn.ModuleList([
+                build_bnneck(self.global_local_reduce_dim) for _ in range(self.global_local_num_parts)
+            ])
+        else:
+            self.classifier = build_classifier(self.in_planes, self.num_classes, self.ID_LOSS_TYPE, cfg)
+            self.bottleneck = build_bnneck(self.in_planes)
+
+    def _classify(self, classifier, feat, label):
+        if self.ID_LOSS_TYPE in ('arcface', 'cosface', 'amsoftmax', 'circle'):
+            return classifier(feat, label)
+        return classifier(feat)
+
+    def _tokens_to_feature_map(self, tokens):
+        patch_tokens = tokens[:, 1:, :]
+        batch_size, token_count, channel_dim = patch_tokens.shape
+
+        patch_embed = self.base.patch_embed
+        if hasattr(patch_embed, 'num_y') and hasattr(patch_embed, 'num_x'):
+            grid_h = patch_embed.num_y
+            grid_w = patch_embed.num_x
+        else:
+            grid_h = int(token_count ** 0.5)
+            grid_w = token_count // max(1, grid_h)
+
+        if grid_h * grid_w != token_count:
+            raise ValueError('Patch tokens cannot be reshaped to a valid feature map.')
+
+        return patch_tokens.transpose(1, 2).contiguous().view(batch_size, channel_dim, grid_h, grid_w)
 
     def forward(self, x, label=None, cam_label= None, view_label=None):
+        if self.use_global_local_fusion:
+            tokens = self.base.forward_token_features(x, camera_id=cam_label, view_id=view_label)
+            global_feat = tokens[:, 0]
+            feat_map = self._tokens_to_feature_map(tokens)
+            final_feat, _, local_feats = self.fusion(feat_map)
+
+            feat = self.bottleneck(final_feat)
+            global_feat_bn = self.global_bottleneck(global_feat)
+            local_feats_bn = [
+                bottleneck(local_feat) for bottleneck, local_feat in zip(self.local_bottlenecks, local_feats)
+            ]
+
+            if self.training:
+                cls_score = self._classify(self.classifier, feat, label)
+                cls_score_global = self._classify(self.global_classifier, global_feat_bn, label)
+                cls_score_locals = [
+                    self._classify(classifier, local_feat_bn, label)
+                    for classifier, local_feat_bn in zip(self.local_classifiers, local_feats_bn)
+                ]
+                return [cls_score, cls_score_global] + cls_score_locals, [final_feat, global_feat] + local_feats
+
+            if self.neck_feat == 'after':
+                return feat
+            return final_feat
+
         global_feat = self.base(x, cam_label=cam_label, view_label=view_label)
 
         feat = self.bottleneck(global_feat)
 
         if self.training:
-            if self.ID_LOSS_TYPE in ('arcface', 'cosface', 'amsoftmax', 'circle'):
-                cls_score = self.classifier(feat, label)
-            else:
-                cls_score = self.classifier(feat)
+            cls_score = self._classify(self.classifier, feat, label)
 
             return cls_score, global_feat  # global feature for triplet loss
         else:
