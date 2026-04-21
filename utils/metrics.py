@@ -119,11 +119,23 @@ class R1_mAP_eval():
         g_pids = np.asarray(self.pids[self.num_query:])
 
         g_camids = np.asarray(self.camids[self.num_query:])
+
+        # Query Expansion (QE): enrich each query with top-k gallery neighbors
+        k_qe = 3  # use top-3 gallery matches
+        print('=> Applying Query Expansion with k={}'.format(k_qe))
+        distmat_init = euclidean_distance(qf, gf)
+        indices = np.argsort(distmat_init, axis=1)
+        qf_expanded = qf.clone()
+        for i in range(qf.shape[0]):
+            top_k_idx = indices[i, :k_qe]
+            qf_expanded[i] = torch.nn.functional.normalize(
+                (qf[i] + gf[top_k_idx].mean(0)).unsqueeze(0), dim=1, p=2
+            ).squeeze(0)
+        qf = qf_expanded
+
         if self.reranking:
             print('=> Enter reranking')
-            # distmat = re_ranking(qf, gf, k1=20, k2=6, lambda_value=0.3)
-            distmat = re_ranking(qf, gf, k1=50, k2=15, lambda_value=0.3)
-
+            distmat = re_ranking(qf, gf, k1=20, k2=6, lambda_value=0.3)
         else:
             print('=> Computing DistMat with euclidean_distance')
             distmat = euclidean_distance(qf, gf)
