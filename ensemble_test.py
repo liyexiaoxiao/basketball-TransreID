@@ -74,8 +74,8 @@ if __name__ == "__main__":
 
     train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
-    # Extract features from each model
-    all_feats = []
+    # Extract features and compute distance matrix from each model
+    distmats = []
     for i, weight_path in enumerate(weight_list):
         logger.info("Loading model {}: {}".format(i + 1, weight_path))
         model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
@@ -83,29 +83,32 @@ if __name__ == "__main__":
         model.to(device)
 
         feats, pids, camids = extract_features_with_tta(model, val_loader, device)
-        all_feats.append(feats)
         logger.info("Extracted features shape: {}".format(feats.shape))
 
         del model
         torch.cuda.empty_cache()
 
-    # Average features from all models
-    logger.info("Averaging features from {} models".format(len(all_feats)))
-    feats = sum(all_feats) / len(all_feats)
+        # Normalize features
+        feats = torch.nn.functional.normalize(feats, dim=1, p=2)
 
-    # Normalize
-    feats = torch.nn.functional.normalize(feats, dim=1, p=2)
+        # Split query / gallery
+        qf = feats[:num_query]
+        gf = feats[num_query:]
+        
+        if i == 0:
+            q_pids = np.asarray(pids[:num_query])
+            q_camids = np.asarray(camids[:num_query])
+            g_pids = np.asarray(pids[num_query:])
+            g_camids = np.asarray(camids[num_query:])
 
-    # Split query / gallery
-    qf = feats[:num_query]
-    gf = feats[num_query:]
-    q_pids = np.asarray(pids[:num_query])
-    q_camids = np.asarray(camids[:num_query])
-    g_pids = np.asarray(pids[num_query:])
-    g_camids = np.asarray(camids[num_query:])
+        distmat = euclidean_distance(qf, gf)
+        distmats.append(distmat)
 
-    # Compute distance and evaluate
-    distmat = euclidean_distance(qf, gf)
+    # Average distance matrices (score-level fusion)
+    logger.info("Averaging distance matrices from {} models".format(len(distmats)))
+    distmat = sum(distmats) / len(distmats)
+    
+    # Evaluate
     cmc, mAP = eval_func(distmat, q_pids, g_pids, q_camids, g_camids)
 
     logger.info("=== Ensemble Results ===")
