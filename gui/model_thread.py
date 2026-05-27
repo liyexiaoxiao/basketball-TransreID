@@ -39,10 +39,12 @@ class ModelWorker:
             self.model.to(self.device)
 
     def load_config_and_model(self, config_path, weight_path, progress_callback=None):
-        # 1. Defrost and load config
+        # 1. Defrost and load config with UTF-8 encoding (fixes Windows default encoding crash)
         if progress_callback: progress_callback("Loading config file...")
         self.cfg.defrost()
-        self.cfg.merge_from_file(config_path)
+        with open(config_path, "r", encoding="utf-8") as f:
+            loaded_cfg = self.cfg.load_cfg(f)
+        self.cfg.merge_from_other_cfg(loaded_cfg)
         if weight_path:
             self.cfg.TEST.WEIGHT = weight_path
         self.cfg.freeze()
@@ -66,9 +68,20 @@ class ModelWorker:
         self.model = make_model(self.cfg, num_class=self.num_classes, camera_num=self.camera_num, view_num=self.view_num)
 
         # 5. Load model weights if provided
+        # Skip if weights match pre-trained ImageNet backbone weights file (which has no classification heads and throws KeyError)
         if self.cfg.TEST.WEIGHT:
-            if progress_callback: progress_callback(f"Loading weights from {self.cfg.TEST.WEIGHT}...")
-            self.model.load_param(self.cfg.TEST.WEIGHT)
+            is_backbone_weights = False
+            if self.cfg.MODEL.PRETRAIN_PATH:
+                pretrain_name = os.path.basename(self.cfg.MODEL.PRETRAIN_PATH).lower()
+                weight_name = os.path.basename(self.cfg.TEST.WEIGHT).lower()
+                if pretrain_name == weight_name or "vit_base_p16" in weight_name:
+                    is_backbone_weights = True
+            
+            if is_backbone_weights:
+                if progress_callback: progress_callback("Using model initialization weights (skipped loading backbone weights as final model weights).")
+            else:
+                if progress_callback: progress_callback(f"Loading weights from {self.cfg.TEST.WEIGHT}...")
+                self.model.load_param(self.cfg.TEST.WEIGHT)
         
         # Move model to device and eval mode
         self.model.to(self.device)
