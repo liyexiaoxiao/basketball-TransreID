@@ -1,6 +1,12 @@
 import sys
 import os
 
+# Import torch at the absolute beginning to prevent Windows WinError 1114 DLL conflicts with PyQt5
+try:
+    import torch
+except ImportError:
+    pass
+
 # Ensure the root directory is in the python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
