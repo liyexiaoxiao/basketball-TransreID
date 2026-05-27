@@ -109,7 +109,7 @@ class MainWindow(QMainWindow):
         model_layout.addLayout(device_layout)
         
         # Model Load Button
-        self.btn_load_model = QPushButton("🚀 Load Config & Model", self)
+        self.btn_load_model = QPushButton("Load Config & Model", self)
         self.btn_load_model.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold; padding: 8px;")
         self.btn_load_model.clicked.connect(self.load_model_action)
         model_layout.addWidget(self.btn_load_model)
@@ -136,7 +136,7 @@ class MainWindow(QMainWindow):
         
         # Choose Image Button
         query_file_layout = QHBoxLayout()
-        self.btn_browse_query = QPushButton("📁 Choose Query Image...", self)
+        self.btn_browse_query = QPushButton("Choose Query Image...", self)
         self.btn_browse_query.clicked.connect(self.browse_query_image)
         query_file_layout.addWidget(self.btn_browse_query)
         query_layout.addLayout(query_file_layout)
@@ -151,13 +151,13 @@ class MainWindow(QMainWindow):
         query_layout.addLayout(topk_layout)
         
         # Extract gallery cache button
-        self.btn_extract_gallery = QPushButton("⚙️ Pre-Extract Gallery Features", self)
+        self.btn_extract_gallery = QPushButton("Pre-Extract Gallery Features", self)
         self.btn_extract_gallery.setEnabled(False)
         self.btn_extract_gallery.clicked.connect(self.extract_gallery_action)
         query_layout.addWidget(self.btn_extract_gallery)
         
         # Retrieval Action Button
-        self.btn_search = QPushButton("🔍 Search & Match", self)
+        self.btn_search = QPushButton("Search & Match", self)
         self.btn_search.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; font-size: 14px; padding: 10px;")
         self.btn_search.setEnabled(False)
         self.btn_search.clicked.connect(self.search_action)
@@ -202,7 +202,7 @@ class MainWindow(QMainWindow):
         self.results_scroll.setWidget(self.results_container)
         tab_search_layout.addWidget(self.results_scroll)
         
-        self.tab_widget.addTab(self.tab_search, "🎯 Single Image Search")
+        self.tab_widget.addTab(self.tab_search, "Single Image Search")
         
         # Tab 2: Dataset Explorer (Lazy-loaded upon model load)
         self.tab_explorer = QWidget(self)
@@ -213,7 +213,7 @@ class MainWindow(QMainWindow):
         self.explorer_placeholder.setStyleSheet("color: #666666; font-size: 14px;")
         self.explorer_layout.addWidget(self.explorer_placeholder)
         
-        self.tab_widget.addTab(self.tab_explorer, "📂 Dataset Explorer")
+        self.tab_widget.addTab(self.tab_explorer, "Dataset Explorer")
         
         # Tab 3: Performance Batch Evaluation
         self.tab_eval = QWidget(self)
@@ -226,7 +226,7 @@ class MainWindow(QMainWindow):
         eval_intro.setStyleSheet("color: #bbbbbb;")
         tab_eval_layout.addWidget(eval_intro)
         
-        self.btn_run_eval = QPushButton("📊 Start Batch Evaluation", self)
+        self.btn_run_eval = QPushButton("Start Batch Evaluation", self)
         self.btn_run_eval.setStyleSheet("background-color: #9b59b6; color: white; font-weight: bold; padding: 10px; font-size: 13px;")
         self.btn_run_eval.setEnabled(False)
         self.btn_run_eval.clicked.connect(self.run_batch_eval_action)
@@ -273,7 +273,7 @@ class MainWindow(QMainWindow):
         self.log_viewer = LogViewer(self)
         tab_eval_layout.addWidget(self.log_viewer, 1)
         
-        self.tab_widget.addTab(self.tab_eval, "📊 Batch Evaluation")
+        self.tab_widget.addTab(self.tab_eval, "Batch Evaluation")
         
         splitter.addWidget(right_panel)
         
@@ -504,7 +504,7 @@ class MainWindow(QMainWindow):
             
         # Disable buttons during load
         self.btn_load_model.setEnabled(False)
-        self.btn_load_model.setText("⏳ Loading Model...")
+        self.btn_load_model.setText("Loading Model...")
         self.lbl_model_details.setText("Model Status: Loading...")
         
         dev = self.combo_device.currentData()
@@ -518,7 +518,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(bool, str, dict)
     def on_model_loaded(self, success, message, details):
         self.btn_load_model.setEnabled(True)
-        self.btn_load_model.setText("🚀 Load Config & Model")
+        self.btn_load_model.setText("Load Config & Model")
         
         if success:
             self.log_viewer.append_log(message)
@@ -578,7 +578,7 @@ class MainWindow(QMainWindow):
     # ==========================================
     def extract_gallery_action(self):
         self.btn_extract_gallery.setEnabled(False)
-        self.btn_extract_gallery.setText("⏳ Extracting...")
+        self.btn_extract_gallery.setText("Extracting...")
         self.progress_bar.setValue(0)
         self.lbl_progress_status.setText("Extracting Gallery...")
         
@@ -597,7 +597,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(bool, str, int)
     def on_extraction_finished(self, success, message, count):
         self.btn_extract_gallery.setEnabled(True)
-        self.btn_extract_gallery.setText("⚙️ Pre-Extract Gallery Features")
+        self.btn_extract_gallery.setText("Pre-Extract Gallery Features")
         
         if success:
             self.log_viewer.append_log(message)
@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
             return
             
         self.btn_search.setEnabled(False)
-        self.btn_search.setText("🔍 Searching...")
+        self.btn_search.setText("Searching...")
         self.lbl_search_summary.setText("Searching gallery database...")
         
         # Clear previous results grid
@@ -639,7 +639,7 @@ class MainWindow(QMainWindow):
         def on_search_done(success, q_path, results):
             elapsed = time.time() - start_time
             self.btn_search.setEnabled(True)
-            self.btn_search.setText("🔍 Search & Match")
+            self.btn_search.setText("Search & Match")
             
             if success:
                 self.lbl_search_summary.setText(f"Retrieved top {len(results)} matches in {elapsed:.3f} seconds.")
@@ -671,7 +671,7 @@ class MainWindow(QMainWindow):
     # ==========================================
     def run_batch_eval_action(self):
         self.btn_run_eval.setEnabled(False)
-        self.btn_run_eval.setText("📊 Evaluating...")
+        self.btn_run_eval.setText("Evaluating...")
         self.progress_bar.setValue(0)
         self.lbl_progress_status.setText("Initializing evaluation...")
         
@@ -696,7 +696,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(bool, float, float, float, float, str)
     def on_eval_finished(self, success, mAP, rank1, rank5, rank10, log_summary):
         self.btn_run_eval.setEnabled(True)
-        self.btn_run_eval.setText("📊 Start Batch Evaluation")
+        self.btn_run_eval.setText("Start Batch Evaluation")
         
         if success:
             self.log_viewer.append_log(log_summary)

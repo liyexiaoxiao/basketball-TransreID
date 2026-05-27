@@ -195,7 +195,7 @@ class DatasetListWidget(QFrame):
         
         # Search Box
         self.search_input = QLineEdit(self)
-        self.search_input.setPlaceholderText("🔍 Search by Player ID...")
+        self.search_input.setPlaceholderText("Search by Player ID...")
         self.search_input.textChanged.connect(self.filter_items)
         layout.addWidget(self.search_input)
         
