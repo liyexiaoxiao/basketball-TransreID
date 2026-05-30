@@ -38,7 +38,19 @@ def do_train(cfg,
     loss_meter = AverageMeter()
     acc_meter = AverageMeter()
 
-    evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
+    evaluator = R1_mAP_eval(
+        num_query,
+        max_rank=50,
+        feat_norm=cfg.TEST.FEAT_NORM,
+        reranking=cfg.TEST.RE_RANKING,
+        rerank_k1=cfg.TEST.RERANK_K1,
+        rerank_k2=cfg.TEST.RERANK_K2,
+        rerank_lambda=cfg.TEST.RERANK_LAMBDA,
+        qe=cfg.TEST.QE,
+        qe_k=cfg.TEST.QE_K,
+        qe_alpha=cfg.TEST.QE_ALPHA,
+        qe_iter=cfg.TEST.QE_ITER,
+    )
     scaler = amp.GradScaler()
     # Initialize EMA model
     ema_model = ModelEMA(model, decay=0.9998)
@@ -152,34 +164,82 @@ def do_inference(cfg,
     logger = logging.getLogger("transreid.test")
     logger.info("Enter inferencing")
 
-    evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
+    evaluator = R1_mAP_eval(
+        num_query,
+        max_rank=50,
+        feat_norm=cfg.TEST.FEAT_NORM,
+        reranking=cfg.TEST.RE_RANKING,
+        rerank_k1=cfg.TEST.RERANK_K1,
+        rerank_k2=cfg.TEST.RERANK_K2,
+        rerank_lambda=cfg.TEST.RERANK_LAMBDA,
+        qe=cfg.TEST.QE,
+        qe_k=cfg.TEST.QE_K,
+        qe_alpha=cfg.TEST.QE_ALPHA,
+        qe_iter=cfg.TEST.QE_ITER,
+    )
 
     evaluator.reset()
 
     if device:
-        if torch.cuda.device_count() > 1:
-            print('Using {} GPUs for inference'.format(torch.cuda.device_count()))
-            model = nn.DataParallel(model)
-        model.to(device)
+        if isinstance(model, (list, tuple)):
+            for m in model:
+                m.to(device)
+        else:
+            if torch.cuda.device_count() > 1:
+                print('Using {} GPUs for inference'.format(torch.cuda.device_count()))
+                model = nn.DataParallel(model)
+            model.to(device)
 
-    model.eval()
+    if isinstance(model, (list, tuple)):
+        for m in model:
+            m.eval()
+    else:
+        model.eval()
     img_path_list = []
 
     logger.info("Using Test-Time Augmentation (horizontal flip)")
+    if getattr(cfg.TEST, 'QE', False):
+        logger.info("Using Query Expansion (k={}, alpha={}, iter={})".format(cfg.TEST.QE_K, cfg.TEST.QE_ALPHA, cfg.TEST.QE_ITER))
+    if getattr(cfg.TEST, 'RE_RANKING', False):
+        logger.info("Using Re-Ranking (k1={}, k2={}, lambda={})".format(cfg.TEST.RERANK_K1, cfg.TEST.RERANK_K2, cfg.TEST.RERANK_LAMBDA))
+    if getattr(cfg.TEST, 'MULTI_SCALE', False):
+        logger.info("Using Multi-Scale Models: {}".format(list(getattr(cfg.TEST, 'SCALES', []))))
 
     for n_iter, (img, pid, camid, camids, target_view, imgpath) in enumerate(val_loader):
         with torch.no_grad():
             img = img.to(device)
             camids = camids.to(device)
             target_view = target_view.to(device)
-            # Original features
-            feat = model(img, cam_label=camids, view_label=target_view)
-            feat = torch.nn.functional.normalize(feat, dim=1, p=2)
-            # Horizontally flipped features (TTA)
-            feat_flip = model(torch.flip(img, dims=[3]), cam_label=camids, view_label=target_view)
-            feat_flip = torch.nn.functional.normalize(feat_flip, dim=1, p=2)
-            # Average original and flipped features
-            feat = (feat + feat_flip) / 2.0
+            if isinstance(model, (list, tuple)):
+                weights = list(getattr(cfg.TEST, 'SCALE_WEIGHTS', []))
+                if weights and len(weights) == len(model):
+                    ws = torch.tensor(weights, dtype=torch.float32, device=device)
+                    ws = ws / (ws.sum() + 1e-12)
+                else:
+                    ws = torch.full((len(model),), 1.0 / len(model), dtype=torch.float32, device=device)
+
+                fused = None
+                for i, m in enumerate(model):
+                    if hasattr(m, 'base') and hasattr(m.base, 'patch_embed') and hasattr(m.base.patch_embed, 'img_size'):
+                        size = m.base.patch_embed.img_size
+                        img_s = torch.nn.functional.interpolate(img, size=size, mode='bilinear', align_corners=False)
+                    else:
+                        img_s = img
+
+                    feat_s = m(img_s, cam_label=camids, view_label=target_view)
+                    feat_s = torch.nn.functional.normalize(feat_s, dim=1, p=2)
+                    feat_flip_s = m(torch.flip(img_s, dims=[3]), cam_label=camids, view_label=target_view)
+                    feat_flip_s = torch.nn.functional.normalize(feat_flip_s, dim=1, p=2)
+                    feat_s = (feat_s + feat_flip_s) / 2.0
+                    feat_s = torch.nn.functional.normalize(feat_s, dim=1, p=2)
+                    fused = feat_s * ws[i] if fused is None else fused + feat_s * ws[i]
+                feat = torch.nn.functional.normalize(fused, dim=1, p=2)
+            else:
+                feat = model(img, cam_label=camids, view_label=target_view)
+                feat = torch.nn.functional.normalize(feat, dim=1, p=2)
+                feat_flip = model(torch.flip(img, dims=[3]), cam_label=camids, view_label=target_view)
+                feat_flip = torch.nn.functional.normalize(feat_flip, dim=1, p=2)
+                feat = (feat + feat_flip) / 2.0
             evaluator.update((feat, pid, camid))
             img_path_list.extend(imgpath)
 
@@ -189,5 +249,3 @@ def do_inference(cfg,
     for r in [1, 5, 10]:
         logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
     return cmc[0], cmc[4]
-
-
