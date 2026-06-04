@@ -12,7 +12,14 @@ from .center_loss import CenterLoss
 
 def make_loss(cfg, num_classes):    # modified by gu
     sampler = cfg.DATALOADER.SAMPLER
-    feat_dim = 2048
+    # Feature dim: ViT-Base=768, ViT-Small/DeiT-Small=384, ResNet50=2048
+    if cfg.MODEL.NAME == 'transformer':
+        if 'small' in cfg.MODEL.TRANSFORMER_TYPE:
+            feat_dim = 384
+        else:
+            feat_dim = 768
+    else:
+        feat_dim = 2048
     center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=True)  # center loss
     if 'triplet' in cfg.MODEL.METRIC_LOSS_TYPE:
         if cfg.MODEL.NO_MARGIN:
