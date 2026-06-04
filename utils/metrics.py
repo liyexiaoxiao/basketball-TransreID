@@ -49,9 +49,9 @@ def eval_func(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=50):
         q_pid = q_pids[q_idx]
         q_camid = q_camids[q_idx]
 
-        # remove gallery samples that have the same pid and camid with query
         order = indices[q_idx]  # select one row
-        keep = np.ones(len(order), dtype=bool)
+        remove = (g_pids[order] == q_pid) & (g_camids[order] == q_camid)
+        keep = np.invert(remove)
 
         # compute cmc curve
         # binary vector, positions with value 1 are correct matches
@@ -87,12 +87,32 @@ def eval_func(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=50):
 
 
 class R1_mAP_eval():
-    def __init__(self, num_query, max_rank=50, feat_norm=True, reranking=False):
+    def __init__(
+        self,
+        num_query,
+        max_rank=50,
+        feat_norm=True,
+        reranking=False,
+        rerank_k1=20,
+        rerank_k2=6,
+        rerank_lambda=0.3,
+        qe=False,
+        qe_k=10,
+        qe_alpha=3.0,
+        qe_iter=1,
+    ):
         super(R1_mAP_eval, self).__init__()
         self.num_query = num_query
         self.max_rank = max_rank
         self.feat_norm = feat_norm
         self.reranking = reranking
+        self.rerank_k1 = rerank_k1
+        self.rerank_k2 = rerank_k2
+        self.rerank_lambda = rerank_lambda
+        self.qe = qe
+        self.qe_k = qe_k
+        self.qe_alpha = qe_alpha
+        self.qe_iter = qe_iter
 
     def reset(self):
         self.feats = []
@@ -104,6 +124,24 @@ class R1_mAP_eval():
         self.feats.append(feat.cpu())
         self.pids.extend(np.asarray(pid))
         self.camids.extend(np.asarray(camid))
+
+    @staticmethod
+    def _apply_qe(qf, gf, k=10, alpha=3.0, iters=1):
+        if k <= 0 or iters <= 0:
+            return qf
+        k = min(k, gf.shape[0])
+        q = qf
+        g = gf
+        for _ in range(iters):
+            sim = q.mm(g.t())
+            topk = torch.topk(sim, k=k, dim=1, largest=True, sorted=False)
+            idx = topk.indices
+            val = topk.values
+            w = torch.clamp(val, min=0.0).pow(alpha).unsqueeze(-1)
+            g_sel = g[idx]
+            agg = (g_sel * w).sum(dim=1)
+            q = torch.nn.functional.normalize(q + agg, dim=1, p=2)
+        return q
 
     def compute(self):  # called after each epoch
         feats = torch.cat(self.feats, dim=0)
@@ -120,15 +158,17 @@ class R1_mAP_eval():
 
         g_camids = np.asarray(self.camids[self.num_query:])
 
+        if self.qe:
+            print('=> Enter query expansion')
+            qf = self._apply_qe(qf, gf, k=self.qe_k, alpha=self.qe_alpha, iters=self.qe_iter)
+
         if self.reranking:
             print('=> Enter reranking')
-            distmat = re_ranking(qf, gf, k1=20, k2=6, lambda_value=0.3)
+            distmat = re_ranking(qf, gf, k1=self.rerank_k1, k2=self.rerank_k2, lambda_value=self.rerank_lambda)
         else:
             print('=> Computing DistMat with euclidean_distance')
             distmat = euclidean_distance(qf, gf)
         cmc, mAP = eval_func(distmat, q_pids, g_pids, q_camids, g_camids)
 
         return cmc, mAP, distmat, self.pids, self.camids, qf, gf
-
-
 

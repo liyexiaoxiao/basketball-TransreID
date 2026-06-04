@@ -40,14 +40,30 @@ if __name__ == "__main__":
 
     os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
 
-    train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+    train_loader, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
-    model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num = view_num)
-    model.load_param(cfg.TEST.WEIGHT)
+    if getattr(cfg.TEST, 'MULTI_SCALE', False):
+        scales = list(getattr(cfg.TEST, 'SCALES', []))
+        if not scales:
+            scales = [cfg.INPUT.SIZE_TEST]
+        models = []
+        for s in scales:
+            cfg_s = cfg.clone()
+            cfg_s.defrost()
+            cfg_s.INPUT.SIZE_TRAIN = list(s)
+            cfg_s.INPUT.SIZE_TEST = list(s)
+            cfg_s.freeze()
+            m = make_model(cfg_s, num_class=num_classes, camera_num=camera_num, view_num=view_num)
+            m.load_param(cfg.TEST.WEIGHT)
+            models.append(m)
+        model = models
+    else:
+        model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num = view_num)
+        model.load_param(cfg.TEST.WEIGHT)
 
     if cfg.DATASETS.NAMES == 'VehicleID':
         for trial in range(10):
-            train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+            train_loader, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
             rank_1, rank5 = do_inference(cfg,
                  model,
                  val_loader,
@@ -66,4 +82,3 @@ if __name__ == "__main__":
                  model,
                  val_loader,
                  num_query)
-

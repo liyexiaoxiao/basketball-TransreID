@@ -165,6 +165,12 @@ _C.SOLVER.EVAL_PERIOD = 10
 # This is global, so if we have 8 GPUs and IMS_PER_BATCH = 128, each GPU will
 # contain 16 images per batch
 _C.SOLVER.IMS_PER_BATCH = 64
+# Gradient clipping max norm (0 = disabled)
+_C.SOLVER.GRAD_CLIP = 0.0
+# Whether to save the best model (based on mAP)
+_C.SOLVER.EVAL_BEST = True
+# TensorBoard logging
+_C.SOLVER.TB_LOG = False
 
 # ---------------------------------------------------------------------------- #
 # TEST
@@ -175,6 +181,16 @@ _C.TEST = CN()
 _C.TEST.IMS_PER_BATCH = 128
 # If test with re-ranking, options: 'True','False'
 _C.TEST.RE_RANKING = False
+_C.TEST.RERANK_K1 = 20
+_C.TEST.RERANK_K2 = 6
+_C.TEST.RERANK_LAMBDA = 0.3
+_C.TEST.QE = False
+_C.TEST.QE_K = 10
+_C.TEST.QE_ALPHA = 3.0
+_C.TEST.QE_ITER = 1
+_C.TEST.MULTI_SCALE = False
+_C.TEST.SCALES = ([256, 128],)
+_C.TEST.SCALE_WEIGHTS = ()
 # Path to trained model
 _C.TEST.WEIGHT = ""
 # Which feature of BNNeck to be used for test, before or after BNNneck, options: 'before' or 'after'

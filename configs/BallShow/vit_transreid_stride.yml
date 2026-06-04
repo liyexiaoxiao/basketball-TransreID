@@ -1,7 +1,7 @@
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
-  PRETRAIN_PATH: './jx_vit_base_p16_224-80ecf9dd.pth'  # 预训练权重路径
-  METRIC_LOSS_TYPE: 'triplet'
+  PRETRAIN_PATH: './jx_vit_base_p16_224-80ecf9dd.pth'
+  METRIC_LOSS_TYPE: 'triplet_center'
   IF_LABELSMOOTH: 'on'
   IF_WITH_CENTER: 'yes'
   NAME: 'transformer'
@@ -13,12 +13,17 @@ MODEL:
   SIE_COE: 3.0
   JPM: True
   RE_ARRANGE: True
+  ID_LOSS_TYPE: 'arcface'
+  ID_LOSS_WEIGHT: 1.0
+  TRIPLET_LOSS_WEIGHT: 1.0
 
 INPUT:
-  SIZE_TRAIN: [256, 128]
-  SIZE_TEST: [256, 128]
+  SIZE_TRAIN: [384, 128]
+  SIZE_TEST: [384, 128]
   PROB: 0.5 # random horizontal flip
   RE_PROB: 0.5 # random erasing
+  CJ_PROB: 0.2 # color jitter + lighting
+  MB_PROB: 0.2 # motion blur + defocus
   PADDING: 10
   PIXEL_MEAN: [0.5, 0.5, 0.5]
   PIXEL_STD: [0.5, 0.5, 0.5]
@@ -38,22 +43,34 @@ SOLVER:
   BASE_LR: 0.008
   IMS_PER_BATCH: 64
   WARMUP_METHOD: 'linear'
+  WARMUP_EPOCHS: 5
   LARGE_FC_LR: False
-  CHECKPOINT_PERIOD: 60
+  CHECKPOINT_PERIOD: 20
   LOG_PERIOD: 50
-  EVAL_PERIOD: 60
+  EVAL_PERIOD: 10
+  EVAL_BEST: True
   WEIGHT_DECAY:  1e-4
   WEIGHT_DECAY_BIAS: 1e-4
   BIAS_LR_FACTOR: 2
+  MOMENTUM: 0.9
+  MARGIN: 0.3
+  CENTER_LR: 0.5
+  CENTER_LOSS_WEIGHT: 0.0005
+  COSINE_SCALE: 30
+  COSINE_MARGIN: 0.5
+  GRAD_CLIP: 1.0
+  TB_LOG: True
+  SEED: 1234
 
 TEST:
   EVAL: True
   IMS_PER_BATCH: 256
-  RE_RANKING: False
+  RE_RANKING: True
+  RERANK_K1: 20
+  RERANK_K2: 6
+  RERANK_LAMBDA: 0.3
   WEIGHT: ''
   NECK_FEAT: 'after'
   FEAT_NORM: 'yes'
 
 OUTPUT_DIR: 'logs/BallShow_vit_transreid_stride'
-
-

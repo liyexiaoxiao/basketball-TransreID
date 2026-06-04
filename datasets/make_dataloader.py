@@ -7,7 +7,7 @@ from timm.data.random_erasing import RandomErasing
 from .sampler import RandomIdentitySampler
 from .sampler_ddp import RandomIdentitySampler_DDP
 from .ballshow import BallShow
-from .preprocessing import RandomMotionBlur, RandomDirectionalLighting, RandomColorTemperature, RandomISONoise, RandomBackgroundBlur
+from .preprocessing import RandomMotionBlur, RandomDirectionalLighting, RandomColorTemperature, RandomISONoise, RandomBackgroundBlur, ComposeNP
 
 __factory = {
     'ballshow': BallShow,
@@ -40,21 +40,28 @@ def make_dataloader(cfg):
     # Environmental changes: Color Jitter / Random Directional Lighting / Indoor-Outdoor Specifics
     if hasattr(cfg.INPUT, 'CJ_PROB') and cfg.INPUT.CJ_PROB > 0:
         train_transforms_list.append(T.RandomApply([T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.0)], p=cfg.INPUT.CJ_PROB))
-        train_transforms_list.append(RandomDirectionalLighting(probability=cfg.INPUT.CJ_PROB * 0.25))
-        # Add indoor/outdoor specific transforms
-        train_transforms_list.append(RandomColorTemperature(probability=cfg.INPUT.CJ_PROB * 0.25, shift_range=30))
-        train_transforms_list.append(RandomISONoise(probability=cfg.INPUT.CJ_PROB * 0.25, intensity_range=(10.0, 25.0)))
-    
-    # Blur: Motion Blur and Defocus Blur (GaussianBlur)
+
+    # Group all NumPy-based custom transforms for efficiency: PIL→NumPy once, run all, NumPy→PIL once
+    np_transforms = []
+    if hasattr(cfg.INPUT, 'CJ_PROB') and cfg.INPUT.CJ_PROB > 0:
+        np_transforms.append(RandomDirectionalLighting(probability=cfg.INPUT.CJ_PROB * 0.25))
+        np_transforms.append(RandomColorTemperature(probability=cfg.INPUT.CJ_PROB * 0.25, shift_range=30))
+        np_transforms.append(RandomISONoise(probability=cfg.INPUT.CJ_PROB * 0.25, intensity_range=(10.0, 25.0)))
+
+    # Blur: Motion Blur (NumPy-based) + Defocus Blur (PIL-based via GaussianBlur)
     if hasattr(cfg.INPUT, 'MB_PROB') and cfg.INPUT.MB_PROB > 0:
         val_mb = cfg.INPUT.MB_PROB * 0.5
-        train_transforms_list.append(RandomMotionBlur(probability=val_mb))
+        np_transforms.append(RandomMotionBlur(probability=val_mb))
+        np_transforms.append(RandomBackgroundBlur(probability=cfg.INPUT.MB_PROB * 0.25))
+
+    if np_transforms:
+        train_transforms_list.append(ComposeNP(np_transforms))
+
+    # Defocus Blur (PIL-based)
+    if hasattr(cfg.INPUT, 'MB_PROB') and cfg.INPUT.MB_PROB > 0:
+        val_mb = cfg.INPUT.MB_PROB * 0.5
         if hasattr(T, 'GaussianBlur'):
             train_transforms_list.append(T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=val_mb * 0.5))
-
-    # Background Blur / Depth of Field simulation
-    if hasattr(cfg.INPUT, 'MB_PROB') and cfg.INPUT.MB_PROB > 0:
-        train_transforms_list.append(RandomBackgroundBlur(probability=cfg.INPUT.MB_PROB * 0.25))
 
     train_transforms_list.extend([
         T.ToTensor(),
@@ -75,7 +82,6 @@ def make_dataloader(cfg):
     dataset = __factory[cfg.DATASETS.NAMES](root=cfg.DATASETS.ROOT_DIR)
 
     train_set = ImageDataset(dataset.train, train_transforms)
-    train_set_normal = ImageDataset(dataset.train, val_transforms)
     num_classes = dataset.num_train_pids
     cam_num = dataset.num_train_cams
     view_num = dataset.num_train_vids
@@ -114,8 +120,4 @@ def make_dataloader(cfg):
         val_set, batch_size=cfg.TEST.IMS_PER_BATCH, shuffle=False, num_workers=num_workers,
         collate_fn=val_collate_fn
     )
-    train_loader_normal = DataLoader(
-        train_set_normal, batch_size=cfg.TEST.IMS_PER_BATCH, shuffle=False, num_workers=num_workers,
-        collate_fn=val_collate_fn
-    )
-    return train_loader, train_loader_normal, val_loader, len(dataset.query), num_classes, cam_num, view_num
+    return train_loader, val_loader, len(dataset.query), num_classes, cam_num, view_num
