@@ -5,7 +5,7 @@ MODEL:
   IF_LABELSMOOTH: 'on'
   IF_WITH_CENTER: 'yes'
   NAME: 'transformer'
-  NO_MARGIN: True
+  NO_MARGIN: False
   DEVICE_ID: ('5')
   TRANSFORMER_TYPE: 'vit_base_patch16_224_TransReID'
   STRIDE_SIZE: [12, 12]
@@ -13,6 +13,9 @@ MODEL:
   SIE_COE: 3.0
   JPM: True
   RE_ARRANGE: True
+  DROP_PATH: 0.2
+  DROP_OUT: 0.1
+  ATT_DROP_RATE: 0.1
 
 INPUT:
   SIZE_TRAIN: [256, 128]
@@ -29,7 +32,7 @@ DATASETS:
 
 DATALOADER:
   SAMPLER: 'softmax_triplet'
-  NUM_INSTANCE: 4
+  NUM_INSTANCE: 8
   NUM_WORKERS: 8
 
 SOLVER:
@@ -45,6 +48,7 @@ SOLVER:
   WEIGHT_DECAY:  1e-4
   WEIGHT_DECAY_BIAS: 1e-4
   BIAS_LR_FACTOR: 2
+  MARGIN: 0.3
 
 TEST:
   EVAL: True
