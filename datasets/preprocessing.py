@@ -5,6 +5,35 @@ import numpy as np
 from PIL import Image
 
 
+class ComposeNP:
+    """Compose multiple NumPy-based transforms efficiently.
+
+    Converts PIL→NumPy once, runs all transforms in NumPy space,
+    converts back to PIL once. This eliminates redundant conversions
+    when chaining multiple custom transforms that each operate on
+    NumPy arrays internally.
+
+    Args:
+        transforms: list of callables, each taking a numpy array and
+                    returning a numpy array.
+    """
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, img):
+        is_pil = isinstance(img, Image.Image)
+        if is_pil:
+            img = np.array(img)
+        for t in self.transforms:
+            img = t(img)
+        if is_pil:
+            img = Image.fromarray(img)
+        return img
+
+    def __repr__(self):
+        return 'ComposeNP([' + ', '.join(str(t) for t in self.transforms) + '])'
+
+
 class RandomErasing(object):
     """ Randomly selects a rectangle region in an image and erases its pixels.
         'Random Erasing Data Augmentation' by Zhong et al.
@@ -69,12 +98,12 @@ class RandomMotionBlur(object):
         if random.uniform(0, 1) >= self.probability:
             return img
 
-        # Work with numpy array
+        # Work with numpy array (avoid copy when already NumPy)
         if isinstance(img, Image.Image):
             img_np = np.array(img)
             is_pil = True
         else:
-            img_np = np.array(img)
+            img_np = img
             is_pil = False
 
         ksize = random.choice(self.kernel_sizes)

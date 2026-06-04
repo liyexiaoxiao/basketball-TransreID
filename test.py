@@ -40,7 +40,7 @@ if __name__ == "__main__":
 
     os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
 
-    train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+    train_loader, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
     if getattr(cfg.TEST, 'MULTI_SCALE', False):
         scales = list(getattr(cfg.TEST, 'SCALES', []))
@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
     if cfg.DATASETS.NAMES == 'VehicleID':
         for trial in range(10):
-            train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+            train_loader, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
             rank_1, rank5 = do_inference(cfg,
                  model,
                  val_loader,

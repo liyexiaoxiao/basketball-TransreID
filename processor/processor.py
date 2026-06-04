@@ -9,6 +9,14 @@ from utils.ema import ModelEMA
 from torch.cuda import amp
 import torch.distributed as dist
 
+# Optional TensorBoard support
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    HAS_TB = True
+except ImportError:
+    HAS_TB = False
+
+
 def do_train(cfg,
              model,
              center_criterion,
@@ -55,6 +63,26 @@ def do_train(cfg,
     # Initialize EMA model
     ema_model = ModelEMA(model, decay=0.9998)
     logger.info('Using EMA with decay=0.9998')
+
+    # TensorBoard
+    tb_writer = None
+    if getattr(cfg.SOLVER, 'TB_LOG', False) and HAS_TB:
+        tb_dir = os.path.join(cfg.OUTPUT_DIR, 'tensorboard')
+        tb_writer = SummaryWriter(log_dir=tb_dir)
+        logger.info('TensorBoard logging enabled: {}'.format(tb_dir))
+    elif getattr(cfg.SOLVER, 'TB_LOG', False) and not HAS_TB:
+        logger.warning('TensorBoard not available (install tensorboard). Skipping TB logging.')
+
+    # Gradient clipping
+    grad_clip = getattr(cfg.SOLVER, 'GRAD_CLIP', 0.0)
+    if grad_clip > 0:
+        logger.info('Using gradient clipping with max_norm={}'.format(grad_clip))
+
+    # Best model tracking
+    eval_best = getattr(cfg.SOLVER, 'EVAL_BEST', False)
+    best_mAP = 0.0
+    best_epoch = 0
+
     # train
     for epoch in range(1, epochs + 1):
         start_time = time.time()
@@ -71,10 +99,15 @@ def do_train(cfg,
             target_cam = target_cam.to(device)
             target_view = target_view.to(device)
             with amp.autocast(enabled=True):
-                score, feat = model(img, target, cam_label=target_cam, view_label=target_view )
+                score, feat = model(img, target, cam_label=target_cam, view_label=target_view)
                 loss = loss_fn(score, feat, target, target_cam)
 
             scaler.scale(loss).backward()
+
+            # Gradient clipping (AMP-aware)
+            if grad_clip > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
 
             scaler.step(optimizer)
             scaler.update()
@@ -85,6 +118,7 @@ def do_train(cfg,
                     param.grad.data *= (1. / cfg.SOLVER.CENTER_LOSS_WEIGHT)
                 scaler.step(optimizer_center)
                 scaler.update()
+
             if isinstance(score, list):
                 acc = (score[0].max(1)[1] == target).float().mean()
             else:
@@ -95,9 +129,14 @@ def do_train(cfg,
 
             torch.cuda.synchronize()
             if (n_iter + 1) % log_period == 0:
-                logger.info("Epoch[{}] Iteration[{}/{}] Loss: {:.3f}, Acc: {:.3f}, Base Lr: {:.2e}"
+                current_lr = scheduler.get_epoch_values(epoch)
+                if current_lr is not None and len(current_lr) > 0:
+                    lr_str = "{:.2e}".format(current_lr[0])
+                else:
+                    lr_str = "N/A"
+                logger.info("Epoch[{}] Iteration[{}/{}] Loss: {:.3f}, Acc: {:.3f}, Base Lr: {}"
                             .format(epoch, (n_iter + 1), len(train_loader),
-                                    loss_meter.avg, acc_meter.avg, scheduler._get_lr(epoch)[0]))
+                                    loss_meter.avg, acc_meter.avg, lr_str))
 
         end_time = time.time()
         time_per_batch = (end_time - start_time) / (n_iter + 1)
@@ -106,6 +145,14 @@ def do_train(cfg,
         else:
             logger.info("Epoch {} done. Time per batch: {:.3f}[s] Speed: {:.1f}[samples/s]"
                     .format(epoch, time_per_batch, train_loader.batch_size / time_per_batch))
+
+        # TensorBoard: log training metrics
+        if tb_writer is not None:
+            current_lr = scheduler.get_epoch_values(epoch)
+            if current_lr is not None and len(current_lr) > 0:
+                tb_writer.add_scalar('Train/LR', current_lr[0], epoch)
+            tb_writer.add_scalar('Train/Loss', loss_meter.avg, epoch)
+            tb_writer.add_scalar('Train/Acc', acc_meter.avg, epoch)
 
         if epoch % checkpoint_period == 0:
             if cfg.MODEL.DIST_TRAIN:
@@ -119,7 +166,7 @@ def do_train(cfg,
                            os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_{}.pth'.format(epoch)))
                 torch.save(ema_model.state_dict(),
                            os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_ema_{}.pth'.format(epoch)))
-                logger.info('Saved EMA model: {}'.format(cfg.MODEL.NAME + '_ema_{}.pth'.format(epoch)))
+                logger.info('Saved checkpoint: {}'.format(cfg.MODEL.NAME + '_{}.pth'.format(epoch)))
 
         if epoch % eval_period == 0:
             if cfg.MODEL.DIST_TRAIN:
@@ -154,6 +201,33 @@ def do_train(cfg,
                 for r in [1, 5, 10]:
                     logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
                 torch.cuda.empty_cache()
+
+                # TensorBoard: log validation metrics
+                if tb_writer is not None:
+                    tb_writer.add_scalar('Val/mAP', mAP, epoch)
+                    tb_writer.add_scalar('Val/Rank-1', cmc[0], epoch)
+                    tb_writer.add_scalar('Val/Rank-5', cmc[4], epoch)
+                    tb_writer.add_scalar('Val/Rank-10', cmc[9], epoch)
+
+                # Save best model
+                if eval_best and mAP > best_mAP:
+                    best_mAP = mAP
+                    best_epoch = epoch
+                    best_model_path = os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_best.pth')
+                    best_ema_path = os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_ema_best.pth')
+                    torch.save(model.state_dict(), best_model_path)
+                    torch.save(ema_model.state_dict(), best_ema_path)
+                    logger.info('>>> New best mAP: {:.1%} at epoch {} — saved as {}'.format(
+                        best_mAP, best_epoch, cfg.MODEL.NAME + '_best.pth'))
+
+    # End of training summary
+    if eval_best:
+        logger.info('=== Training complete. Best mAP: {:.1%} at epoch {} ==='.format(best_mAP, best_epoch))
+    else:
+        logger.info('=== Training complete ===')
+
+    if tb_writer is not None:
+        tb_writer.close()
 
 
 def do_inference(cfg,

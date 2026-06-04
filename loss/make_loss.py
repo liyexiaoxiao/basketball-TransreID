@@ -10,16 +10,26 @@ from .triplet_loss import TripletLoss
 from .center_loss import CenterLoss
 
 
-def make_loss(cfg, num_classes):    # modified by gu
+def make_loss(cfg, num_classes):
     sampler = cfg.DATALOADER.SAMPLER
-    feat_dim = 2048
-    center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=True)  # center loss
+
+    # Auto-detect feature dimension: ViT uses 768, ResNet uses 2048
+    if cfg.MODEL.NAME == 'transformer':
+        feat_dim = 768
+        if cfg.MODEL.TRANSFORMER_TYPE and 'deit_small' in cfg.MODEL.TRANSFORMER_TYPE:
+            feat_dim = 384
+    else:
+        feat_dim = 2048
+
+    center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=True)
+    print(f"CenterLoss initialized with feat_dim={feat_dim}, num_classes={num_classes}")
+
     if 'triplet' in cfg.MODEL.METRIC_LOSS_TYPE:
         if cfg.MODEL.NO_MARGIN:
             triplet = TripletLoss()
             print("using soft triplet loss for training")
         else:
-            triplet = TripletLoss(cfg.SOLVER.MARGIN)  # triplet loss
+            triplet = TripletLoss(cfg.SOLVER.MARGIN)
             print("using triplet loss with margin:{}".format(cfg.SOLVER.MARGIN))
     else:
         print('expected METRIC_LOSS_TYPE should be triplet'
@@ -35,7 +45,7 @@ def make_loss(cfg, num_classes):    # modified by gu
 
     elif cfg.DATALOADER.SAMPLER == 'softmax_triplet':
         def loss_func(score, feat, target, target_cam):
-            if cfg.MODEL.METRIC_LOSS_TYPE == 'triplet':
+            if cfg.MODEL.METRIC_LOSS_TYPE == 'triplet' or cfg.MODEL.METRIC_LOSS_TYPE == 'triplet_center':
                 if cfg.MODEL.IF_LABELSMOOTH == 'on':
                     if isinstance(score, list):
                         ID_LOSS = [xent(scor, target) for scor in score[1:]]
@@ -51,8 +61,18 @@ def make_loss(cfg, num_classes):    # modified by gu
                     else:
                             TRI_LOSS = triplet(feat, target)[0]
 
-                    return cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
+                    total_loss = cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
                                cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS
+
+                    # Integrate center loss
+                    if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+                        if isinstance(feat, list):
+                            CENTER_LOSS = center_criterion(feat[0], target)
+                        else:
+                            CENTER_LOSS = center_criterion(feat, target)
+                        total_loss = total_loss + cfg.SOLVER.CENTER_LOSS_WEIGHT * CENTER_LOSS
+
+                    return total_loss
                 else:
                     if isinstance(score, list):
                         ID_LOSS = [F.cross_entropy(scor, target) for scor in score[1:]]
@@ -68,8 +88,18 @@ def make_loss(cfg, num_classes):    # modified by gu
                     else:
                             TRI_LOSS = triplet(feat, target)[0]
 
-                    return cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
+                    total_loss = cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
                                cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS
+
+                    # Integrate center loss
+                    if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+                        if isinstance(feat, list):
+                            CENTER_LOSS = center_criterion(feat[0], target)
+                        else:
+                            CENTER_LOSS = center_criterion(feat, target)
+                        total_loss = total_loss + cfg.SOLVER.CENTER_LOSS_WEIGHT * CENTER_LOSS
+
+                    return total_loss
             else:
                 print('expected METRIC_LOSS_TYPE should be triplet'
                       'but got {}'.format(cfg.MODEL.METRIC_LOSS_TYPE))
@@ -78,5 +108,3 @@ def make_loss(cfg, num_classes):    # modified by gu
         print('expected sampler should be softmax, triplet, softmax_triplet or softmax_triplet_center'
               'but got {}'.format(cfg.DATALOADER.SAMPLER))
     return loss_func, center_criterion
-
-

@@ -22,7 +22,7 @@ from utils.metrics import R1_mAP_eval, euclidean_distance, eval_func
 
 
 def extract_features_with_tta(model, val_loader, device):
-    """Extract features using TTA (horizontal flip)."""
+    """Extract features using TTA (horizontal flip) with AMP for speed."""
     model.eval()
     feats_list = []
     pids_list = []
@@ -33,11 +33,12 @@ def extract_features_with_tta(model, val_loader, device):
             img = img.to(device)
             camids_dev = camids.to(device)
             target_view = target_view.to(device)
-            # Original
-            feat = model(img, cam_label=camids_dev, view_label=target_view)
-            # Horizontal flip TTA
-            feat_flip = model(torch.flip(img, dims=[3]), cam_label=camids_dev, view_label=target_view)
-            feat = (feat + feat_flip) / 2.0
+            with torch.cuda.amp.autocast(enabled=True):
+                # Original
+                feat = model(img, cam_label=camids_dev, view_label=target_view)
+                # Horizontal flip TTA
+                feat_flip = model(torch.flip(img, dims=[3]), cam_label=camids_dev, view_label=target_view)
+            feat = (feat.float() + feat_flip.float()) / 2.0
 
             feats_list.append(feat.cpu())
             pids_list.extend(np.asarray(pid))
@@ -72,7 +73,7 @@ if __name__ == "__main__":
     os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
     device = "cuda"
 
-    train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+    _, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
     # Extract features and compute distance matrix from each model
     distmats = []
