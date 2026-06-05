@@ -1,7 +1,7 @@
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
   PRETRAIN_PATH: './jx_vit_base_p16_224-80ecf9dd.pth'  # 预训练权重路径
-  METRIC_LOSS_TYPE: 'triplet'
+  METRIC_LOSS_TYPE: 'triplet_center'
   IF_LABELSMOOTH: 'on'
   IF_WITH_CENTER: 'yes'
   NAME: 'transformer'
