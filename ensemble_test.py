@@ -1,13 +1,13 @@
 """
-Ensemble test: load multiple model weights, extract features with TTA,
-average the features, and evaluate. This combines complementary information
-from different training checkpoints.
+Ensemble test with feature-level fusion: load multiple model weights,
+extract features with TTA, average features across models, and evaluate.
+
+Feature-level fusion is more effective than score-level (distance matrix)
+fusion because it preserves the geometric relationship between features.
 
 Usage:
     python ensemble_test.py --config_file configs/BallShow/vit_transreid_stride.yml \
-        MODEL.DEVICE_ID "('0')" \
-        --weights logs/BallShow_vit_transreid_stride/transformer_ema_120.pth \
-                  logs/BallShow_vit_transreid_stride/transformer_ema_180.pth
+        --weights logs/BallShow_vit_transreid_stride/transformer_ema_80.pth,logs/BallShow_vit_transreid_stride/transformer_ema_100.pth,logs/BallShow_vit_transreid_stride/transformer_ema_120.pth
 """
 import os
 import argparse
@@ -48,10 +48,12 @@ def extract_features_with_tta(model, val_loader, device):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ReID Ensemble Test")
+    parser = argparse.ArgumentParser(description="ReID Ensemble Test with Feature-Level Fusion")
     parser.add_argument("--config_file", default="", type=str)
     parser.add_argument("--weights", required=True, type=str,
                         help="Comma-separated list of model weight paths, e.g. path1.pth,path2.pth")
+    parser.add_argument("--fusion", default="feature", choices=["feature", "score"],
+                        help="Fusion method: 'feature' averages feature vectors, 'score' averages distance matrices")
     parser.add_argument("opts", default=None, nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
@@ -67,51 +69,84 @@ if __name__ == "__main__":
         os.makedirs(output_dir)
 
     logger = setup_logger("transreid", output_dir, if_train=False)
-    logger.info("Ensemble test with {} models".format(len(weight_list)))
+    logger.info("Ensemble test with {} models, fusion method: {}".format(len(weight_list), args.fusion))
 
     os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
     device = "cuda"
 
     train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
-    # Extract features and compute distance matrix from each model
-    distmats = []
-    for i, weight_path in enumerate(weight_list):
-        logger.info("Loading model {}: {}".format(i + 1, weight_path))
-        model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
-        model.load_param(weight_path)
-        model.to(device)
+    if args.fusion == "feature":
+        # Feature-level fusion: average features from all models, then compute distance
+        all_feats = []
+        for i, weight_path in enumerate(weight_list):
+            logger.info("Loading model {}: {}".format(i + 1, weight_path))
+            model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
+            model.load_param(weight_path)
+            model.to(device)
 
-        feats, pids, camids = extract_features_with_tta(model, val_loader, device)
-        logger.info("Extracted features shape: {}".format(feats.shape))
+            feats, pids, camids = extract_features_with_tta(model, val_loader, device)
+            logger.info("Extracted features shape: {}".format(feats.shape))
 
-        del model
-        torch.cuda.empty_cache()
+            del model
+            torch.cuda.empty_cache()
 
-        # Normalize features
-        feats = torch.nn.functional.normalize(feats, dim=1, p=2)
+            # L2-normalize independently before averaging
+            feats = torch.nn.functional.normalize(feats, dim=1, p=2)
+            all_feats.append(feats)
 
-        # Split query / gallery
-        qf = feats[:num_query]
-        gf = feats[num_query:]
-        
-        if i == 0:
-            q_pids = np.asarray(pids[:num_query])
-            q_camids = np.asarray(camids[:num_query])
-            g_pids = np.asarray(pids[num_query:])
-            g_camids = np.asarray(camids[num_query:])
+            if i == 0:
+                q_pids = np.asarray(pids[:num_query])
+                q_camids = np.asarray(camids[:num_query])
+                g_pids = np.asarray(pids[num_query:])
+                g_camids = np.asarray(camids[num_query:])
 
+        # Average normalized features across models (feature-level fusion)
+        logger.info("Averaging features from {} models".format(len(all_feats)))
+        avg_feats = sum(all_feats) / len(all_feats)
+        # Re-normalize after averaging
+        avg_feats = torch.nn.functional.normalize(avg_feats, dim=1, p=2)
+
+        qf = avg_feats[:num_query]
+        gf = avg_feats[num_query:]
         distmat = euclidean_distance(qf, gf)
-        distmats.append(distmat)
 
-    # Average distance matrices (score-level fusion)
-    logger.info("Averaging distance matrices from {} models".format(len(distmats)))
-    distmat = sum(distmats) / len(distmats)
-    
+    else:
+        # Score-level fusion: average distance matrices (original behavior)
+        distmats = []
+        for i, weight_path in enumerate(weight_list):
+            logger.info("Loading model {}: {}".format(i + 1, weight_path))
+            model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
+            model.load_param(weight_path)
+            model.to(device)
+
+            feats, pids, camids = extract_features_with_tta(model, val_loader, device)
+            logger.info("Extracted features shape: {}".format(feats.shape))
+
+            del model
+            torch.cuda.empty_cache()
+
+            feats = torch.nn.functional.normalize(feats, dim=1, p=2)
+
+            qf = feats[:num_query]
+            gf = feats[num_query:]
+
+            if i == 0:
+                q_pids = np.asarray(pids[:num_query])
+                q_camids = np.asarray(camids[:num_query])
+                g_pids = np.asarray(pids[num_query:])
+                g_camids = np.asarray(camids[num_query:])
+
+            distmat = euclidean_distance(qf, gf)
+            distmats.append(distmat)
+
+        logger.info("Averaging distance matrices from {} models".format(len(distmats)))
+        distmat = sum(distmats) / len(distmats)
+
     # Evaluate
     cmc, mAP = eval_func(distmat, q_pids, g_pids, q_camids, g_camids)
 
-    logger.info("=== Ensemble Results ===")
+    logger.info("=== Ensemble Results ({}-level fusion) ===".format(args.fusion))
     logger.info("mAP: {:.1%}".format(mAP))
     for r in [1, 5, 10]:
         logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
