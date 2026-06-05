@@ -6,7 +6,6 @@ MODEL:
   IF_WITH_CENTER: 'yes'
   NAME: 'transformer'
   NO_MARGIN: True
-  ID_LOSS_TYPE: 'arcface'
   DEVICE_ID: ('0')
   TRANSFORMER_TYPE: 'vit_base_patch16_224_TransReID'
   STRIDE_SIZE: [12, 12]
@@ -39,7 +38,7 @@ SOLVER:
   OPTIMIZER_NAME: 'SGD'
   MAX_EPOCHS: 120
   BASE_LR: 0.008
-  IMS_PER_BATCH: 64
+  IMS_PER_BATCH: 96
   WARMUP_METHOD: 'linear'
   LARGE_FC_LR: False
   CHECKPOINT_PERIOD: 40
