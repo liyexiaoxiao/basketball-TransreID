@@ -1,9 +1,11 @@
+# Ablation config: Triplet+Center + AdamW
+# Compare against vit_transreid_stride.yml (Circle+AdamW) to isolate Circle Loss effect
 MODEL:
   PRETRAIN_CHOICE: 'imagenet'
   PRETRAIN_PATH: './jx_vit_base_p16_224-80ecf9dd.pth'
-  METRIC_LOSS_TYPE: 'circle'           # ★ Circle Loss replaces Triplet+Center
+  METRIC_LOSS_TYPE: 'triplet_center'   # Original Triplet+Center
   IF_LABELSMOOTH: 'on'
-  IF_WITH_CENTER: 'no'                 # no center loss (circle handles it)
+  IF_WITH_CENTER: 'yes'
   NAME: 'transformer'
   NO_MARGIN: True
   DEVICE_ID: ('5')
@@ -15,7 +17,7 @@ MODEL:
   RE_ARRANGE: True
   ID_LOSS_TYPE: 'arcface'
   ID_LOSS_WEIGHT: 1.0
-  TRIPLET_LOSS_WEIGHT: 1.0            # weight for metric loss (now Circle Loss)
+  TRIPLET_LOSS_WEIGHT: 1.0
 
 INPUT:
   SIZE_TRAIN: [384, 128]
@@ -38,10 +40,10 @@ DATALOADER:
   NUM_WORKERS: 8
 
 SOLVER:
-  OPTIMIZER_NAME: 'AdamW'             # ★ AdamW for ViT (better than SGD)
+  OPTIMIZER_NAME: 'AdamW'             # AdamW for ablation comparison
   ADAM_BETAS: (0.9, 0.999)
   MAX_EPOCHS: 180
-  BASE_LR: 0.00035                    # ★ AdamW lr (20-30× lower than SGD)
+  BASE_LR: 0.00035
   IMS_PER_BATCH: 64
   WARMUP_METHOD: 'linear'
   WARMUP_EPOCHS: 5
@@ -50,17 +52,15 @@ SOLVER:
   LOG_PERIOD: 50
   EVAL_PERIOD: 10
   EVAL_BEST: True
-  WEIGHT_DECAY: 0.05                  # ★ AdamW decoupled weight decay
-  WEIGHT_DECAY_BIAS: 0.0              # no decay for bias/norm
-  BIAS_LR_FACTOR: 1.0                 # AdamW doesn't need bias lr scaling
+  WEIGHT_DECAY: 0.05
+  WEIGHT_DECAY_BIAS: 0.0
+  BIAS_LR_FACTOR: 1.0
   MOMENTUM: 0.9
   MARGIN: 0.3
   CENTER_LR: 0.5
   CENTER_LOSS_WEIGHT: 0.0005
   COSINE_SCALE: 30
   COSINE_MARGIN: 0.5
-  CIRCLE_S: 256.0                     # ★ Circle Loss scale factor γ
-  CIRCLE_M: 0.25                      # ★ Circle Loss relaxation margin m
   GRAD_CLIP: 1.0
   TB_LOG: True
   SEED: 1234
@@ -76,4 +76,4 @@ TEST:
   NECK_FEAT: 'after'
   FEAT_NORM: 'yes'
 
-OUTPUT_DIR: 'logs/BallShow_vit_transreid_stride'
+OUTPUT_DIR: 'logs/BallShow_vit_transreid_stride_adamw'

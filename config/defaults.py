@@ -39,7 +39,7 @@ _C.MODEL.ID_LOSS_TYPE = 'softmax'
 _C.MODEL.ID_LOSS_WEIGHT = 1.0
 _C.MODEL.TRIPLET_LOSS_WEIGHT = 1.0
 
-_C.MODEL.METRIC_LOSS_TYPE = 'triplet'
+_C.MODEL.METRIC_LOSS_TYPE = 'triplet'  # options: 'triplet', 'triplet_center', 'circle', 'circle_center'
 # If train with multi-gpu ddp mode, options: 'True', 'False'
 _C.MODEL.DIST_TRAIN = False
 # If train with soft triplet loss, options: 'True', 'False'
@@ -118,6 +118,8 @@ _C.DATALOADER.NUM_INSTANCE = 16
 _C.SOLVER = CN()
 # Name of optimizer
 _C.SOLVER.OPTIMIZER_NAME = "Adam"
+# Adam/AdamW betas (momentum coefficients)
+_C.SOLVER.ADAM_BETAS = (0.9, 0.999)
 # Number of max epoches
 _C.SOLVER.MAX_EPOCHS = 100
 # Base learning rate
@@ -134,7 +136,7 @@ _C.SOLVER.MOMENTUM = 0.9
 _C.SOLVER.MARGIN = 0.3
 # Learning rate of SGD to learn the centers of center loss
 _C.SOLVER.CENTER_LR = 0.5
-# Balanced weight of center loss
+# Balanced weight of center loss (only used when METRIC_LOSS_TYPE contains 'center')
 _C.SOLVER.CENTER_LOSS_WEIGHT = 0.0005
 
 # Settings of weight decay
@@ -152,8 +154,13 @@ _C.SOLVER.WARMUP_EPOCHS = 5
 # method of warm up, option: 'constant','linear'
 _C.SOLVER.WARMUP_METHOD = "linear"
 
+# Scale s and margin m for ArcFace / Cosface / AMSoftmax / Circle (ID-level classifier)
 _C.SOLVER.COSINE_MARGIN = 0.5
 _C.SOLVER.COSINE_SCALE = 30
+
+# Circle Loss parameters (used when MODEL.METRIC_LOSS_TYPE contains 'circle')
+_C.SOLVER.CIRCLE_S = 256.0   # scale factor γ
+_C.SOLVER.CIRCLE_M = 0.25    # relaxation margin m
 
 # epoch number of saving checkpoints
 _C.SOLVER.CHECKPOINT_PERIOD = 10
