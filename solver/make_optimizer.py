@@ -60,7 +60,11 @@ def make_optimizer(cfg, model, center_criterion):
         optimizer = getattr(torch.optim, cfg.SOLVER.OPTIMIZER_NAME)(params)
         print(f"Optimizer: {cfg.SOLVER.OPTIMIZER_NAME}")
 
-    # ── Center optimizer (always SGD) ────────────────────────────────────────
-    optimizer_center = torch.optim.SGD(center_criterion.parameters(), lr=cfg.SOLVER.CENTER_LR)
+    # ── Center optimizer (always SGD; only created when center loss is active) ──
+    if center_criterion is not None and 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+        optimizer_center = torch.optim.SGD(center_criterion.parameters(), lr=cfg.SOLVER.CENTER_LR)
+    else:
+        # Dummy optimizer — won't be stepped because processor guards on METRIC_LOSS_TYPE
+        optimizer_center = None
 
     return optimizer, optimizer_center

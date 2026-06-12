@@ -93,7 +93,8 @@ def do_train(cfg,
         model.train()
         for n_iter, (img, vid, target_cam, target_view) in enumerate(train_loader):
             optimizer.zero_grad()
-            optimizer_center.zero_grad()
+            if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+                optimizer_center.zero_grad()
             img = img.to(device)
             target = vid.to(device)
             target_cam = target_cam.to(device)
