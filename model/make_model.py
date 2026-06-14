@@ -28,7 +28,8 @@ def weights_init_kaiming(m):
     classname = m.__class__.__name__
     if classname.find('Linear') != -1:
         nn.init.kaiming_normal_(m.weight, a=0, mode='fan_out')
-        nn.init.constant_(m.bias, 0.0)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0.0)
 
     elif classname.find('Conv') != -1:
         nn.init.kaiming_normal_(m.weight, a=0, mode='fan_in')
@@ -74,7 +75,7 @@ class Backbone(nn.Module):
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.num_classes = num_classes
 
-        self.classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
+        self.classifier = nn.Linear(classifier_in_dim, self.num_classes, bias=False)
         self.classifier.apply(weights_init_classifier)
 
         self.bottleneck = nn.BatchNorm1d(self.in_planes)
@@ -144,7 +145,10 @@ class build_transformer(nn.Module):
         self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE,
                                                         camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH,
                                                         drop_rate= cfg.MODEL.DROP_OUT,
-                                                        attn_drop_rate=cfg.MODEL.ATT_DROP_RATE)
+                                                        attn_drop_rate=cfg.MODEL.ATT_DROP_RATE,
+                                                        patch_drop_prob=cfg.MODEL.PATCH_DROP_PROB,
+                                                        mixstyle_p=cfg.MODEL.MIXSTYLE_P,
+                                                        mixstyle_alpha=cfg.MODEL.MIXSTYLE_ALPHA)
         if cfg.MODEL.TRANSFORMER_TYPE == 'deit_small_patch16_224_TransReID':
             self.in_planes = 384
         if pretrain_choice == 'imagenet':
@@ -157,22 +161,22 @@ class build_transformer(nn.Module):
         self.ID_LOSS_TYPE = cfg.MODEL.ID_LOSS_TYPE
         if self.ID_LOSS_TYPE == 'arcface':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = Arcface(self.in_planes, self.num_classes,
+            self.classifier = Arcface(classifier_in_dim, self.num_classes,
                                       s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
         elif self.ID_LOSS_TYPE == 'cosface':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = Cosface(self.in_planes, self.num_classes,
+            self.classifier = Cosface(classifier_in_dim, self.num_classes,
                                       s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
         elif self.ID_LOSS_TYPE == 'amsoftmax':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = AMSoftmax(self.in_planes, self.num_classes,
+            self.classifier = AMSoftmax(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
         elif self.ID_LOSS_TYPE == 'circle':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE, cfg.SOLVER.COSINE_SCALE, cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = CircleLoss(self.in_planes, self.num_classes,
+            self.classifier = CircleLoss(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
         else:
-            self.classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
+            self.classifier = nn.Linear(classifier_in_dim, self.num_classes, bias=False)
             self.classifier.apply(weights_init_classifier)
 
         self.bottleneck = nn.BatchNorm1d(self.in_planes)
@@ -234,7 +238,10 @@ class build_transformer_local(nn.Module):
         else:
             view_num = 0
 
-        self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE, local_feature=cfg.MODEL.JPM, camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH)
+        self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE, local_feature=cfg.MODEL.JPM, camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH,
+                                                        patch_drop_prob=cfg.MODEL.PATCH_DROP_PROB,
+                                                        mixstyle_p=cfg.MODEL.MIXSTYLE_P,
+                                                        mixstyle_alpha=cfg.MODEL.MIXSTYLE_ALPHA)
 
         if pretrain_choice == 'imagenet':
             self.base.load_param(model_path)
@@ -251,66 +258,73 @@ class build_transformer_local(nn.Module):
             copy.deepcopy(layer_norm)
         )
 
+        # ── Feature dimension compression (shared across all 5 branches) ──────
+        self.proj_dim = getattr(cfg.MODEL, 'PROJ_DIM', 0)
+        if self.proj_dim > 0:
+            classifier_in_dim = self.proj_dim
+        else:
+            classifier_in_dim = self.in_planes
+
         self.num_classes = num_classes
         self.ID_LOSS_TYPE = cfg.MODEL.ID_LOSS_TYPE
         if self.ID_LOSS_TYPE == 'arcface':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = Arcface(self.in_planes, self.num_classes,
+            self.classifier = Arcface(classifier_in_dim, self.num_classes,
                                       s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_1 = Arcface(self.in_planes, self.num_classes,
+            self.classifier_1 = Arcface(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_2 = Arcface(self.in_planes, self.num_classes,
+            self.classifier_2 = Arcface(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_3 = Arcface(self.in_planes, self.num_classes,
+            self.classifier_3 = Arcface(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_4 = Arcface(self.in_planes, self.num_classes,
+            self.classifier_4 = Arcface(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
         elif self.ID_LOSS_TYPE == 'cosface':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = Cosface(self.in_planes, self.num_classes,
+            self.classifier = Cosface(classifier_in_dim, self.num_classes,
                                       s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_1 = Cosface(self.in_planes, self.num_classes,
+            self.classifier_1 = Cosface(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_2 = Cosface(self.in_planes, self.num_classes,
+            self.classifier_2 = Cosface(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_3 = Cosface(self.in_planes, self.num_classes,
+            self.classifier_3 = Cosface(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_4 = Cosface(self.in_planes, self.num_classes,
+            self.classifier_4 = Cosface(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
         elif self.ID_LOSS_TYPE == 'amsoftmax':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = AMSoftmax(self.in_planes, self.num_classes,
+            self.classifier = AMSoftmax(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_1 = AMSoftmax(self.in_planes, self.num_classes,
+            self.classifier_1 = AMSoftmax(classifier_in_dim, self.num_classes,
                                           s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_2 = AMSoftmax(self.in_planes, self.num_classes,
+            self.classifier_2 = AMSoftmax(classifier_in_dim, self.num_classes,
                                           s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_3 = AMSoftmax(self.in_planes, self.num_classes,
+            self.classifier_3 = AMSoftmax(classifier_in_dim, self.num_classes,
                                           s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_4 = AMSoftmax(self.in_planes, self.num_classes,
+            self.classifier_4 = AMSoftmax(classifier_in_dim, self.num_classes,
                                           s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
         elif self.ID_LOSS_TYPE == 'circle':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE, cfg.SOLVER.COSINE_SCALE, cfg.SOLVER.COSINE_MARGIN))
-            self.classifier = CircleLoss(self.in_planes, self.num_classes,
+            self.classifier = CircleLoss(classifier_in_dim, self.num_classes,
                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_1 = CircleLoss(self.in_planes, self.num_classes,
+            self.classifier_1 = CircleLoss(classifier_in_dim, self.num_classes,
                                            s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_2 = CircleLoss(self.in_planes, self.num_classes,
+            self.classifier_2 = CircleLoss(classifier_in_dim, self.num_classes,
                                            s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_3 = CircleLoss(self.in_planes, self.num_classes,
+            self.classifier_3 = CircleLoss(classifier_in_dim, self.num_classes,
                                            s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
-            self.classifier_4 = CircleLoss(self.in_planes, self.num_classes,
+            self.classifier_4 = CircleLoss(classifier_in_dim, self.num_classes,
                                            s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
         else:
-            self.classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
+            self.classifier = nn.Linear(classifier_in_dim, self.num_classes, bias=False)
             self.classifier.apply(weights_init_classifier)
-            self.classifier_1 = nn.Linear(self.in_planes, self.num_classes, bias=False)
+            self.classifier_1 = nn.Linear(classifier_in_dim, self.num_classes, bias=False)
             self.classifier_1.apply(weights_init_classifier)
-            self.classifier_2 = nn.Linear(self.in_planes, self.num_classes, bias=False)
+            self.classifier_2 = nn.Linear(classifier_in_dim, self.num_classes, bias=False)
             self.classifier_2.apply(weights_init_classifier)
-            self.classifier_3 = nn.Linear(self.in_planes, self.num_classes, bias=False)
+            self.classifier_3 = nn.Linear(classifier_in_dim, self.num_classes, bias=False)
             self.classifier_3.apply(weights_init_classifier)
-            self.classifier_4 = nn.Linear(self.in_planes, self.num_classes, bias=False)
+            self.classifier_4 = nn.Linear(classifier_in_dim, self.num_classes, bias=False)
             self.classifier_4.apply(weights_init_classifier)
 
         self.bottleneck = nn.BatchNorm1d(self.in_planes)
@@ -328,6 +342,15 @@ class build_transformer_local(nn.Module):
         self.bottleneck_4 = nn.BatchNorm1d(self.in_planes)
         self.bottleneck_4.bias.requires_grad_(False)
         self.bottleneck_4.apply(weights_init_kaiming)
+
+        # ── Projection layer (if PROJ_DIM > 0) ───────────────────────────────
+        if self.proj_dim > 0:
+            self.proj = nn.Linear(self.in_planes, self.proj_dim, bias=False)
+            self.proj.apply(weights_init_kaiming)
+            print(f'using feature compression: {self.in_planes} -> {self.proj_dim} '
+                  f'(test-time: 5x{self.proj_dim}={5*self.proj_dim}-dim)')
+        else:
+            self.proj = None
 
         self.shuffle_groups = cfg.MODEL.SHUFFLE_GROUP
         print('using shuffle_groups size:{}'.format(self.shuffle_groups))
@@ -381,31 +404,44 @@ class build_transformer_local(nn.Module):
         local_feat_3_bn = self.bottleneck_3(local_feat_3)
         local_feat_4_bn = self.bottleneck_4(local_feat_4)
 
+        # ── Feature compression (shared projection) ──────────────────────────
+        if self.proj is not None:
+            feat_proj = self.proj(feat)
+            l1_proj = self.proj(local_feat_1_bn)
+            l2_proj = self.proj(local_feat_2_bn)
+            l3_proj = self.proj(local_feat_3_bn)
+            l4_proj = self.proj(local_feat_4_bn)
+            cls_feat = feat_proj
+            cls_l1, cls_l2, cls_l3, cls_l4 = l1_proj, l2_proj, l3_proj, l4_proj
+            metric_feat = [feat_proj, l1_proj, l2_proj, l3_proj, l4_proj]
+        else:
+            cls_feat = feat
+            cls_l1, cls_l2, cls_l3, cls_l4 = local_feat_1_bn, local_feat_2_bn, local_feat_3_bn, local_feat_4_bn
+            metric_feat = [global_feat, local_feat_1, local_feat_2, local_feat_3, local_feat_4]
+
         if self.training:
             if self.ID_LOSS_TYPE in ('arcface', 'cosface', 'amsoftmax', 'circle'):
-                cls_score = self.classifier(feat, label)
-                cls_score_1 = self.classifier_1(local_feat_1_bn, label)
-                cls_score_2 = self.classifier_2(local_feat_2_bn, label)
-                cls_score_3 = self.classifier_3(local_feat_3_bn, label)
-                cls_score_4 = self.classifier_4(local_feat_4_bn, label)
+                cls_score = self.classifier(cls_feat, label)
+                cls_score_1 = self.classifier_1(cls_l1, label)
+                cls_score_2 = self.classifier_2(cls_l2, label)
+                cls_score_3 = self.classifier_3(cls_l3, label)
+                cls_score_4 = self.classifier_4(cls_l4, label)
             else:
-                cls_score = self.classifier(feat)
-                cls_score_1 = self.classifier_1(local_feat_1_bn)
-                cls_score_2 = self.classifier_2(local_feat_2_bn)
-                cls_score_3 = self.classifier_3(local_feat_3_bn)
-                cls_score_4 = self.classifier_4(local_feat_4_bn)
+                cls_score = self.classifier(cls_feat)
+                cls_score_1 = self.classifier_1(cls_l1)
+                cls_score_2 = self.classifier_2(cls_l2)
+                cls_score_3 = self.classifier_3(cls_l3)
+                cls_score_4 = self.classifier_4(cls_l4)
             return [cls_score, cls_score_1, cls_score_2, cls_score_3,
                         cls_score_4
-                        ], [global_feat, local_feat_1, local_feat_2, local_feat_3,
-                            local_feat_4]  # global feature for triplet loss
+                        ], metric_feat
         else:
             if self.neck_feat == 'after':
-                # Independent L2-norm maximizes multi-branch complementarity
-                feat_n = torch.nn.functional.normalize(feat, dim=1, p=2)
-                l1_n = torch.nn.functional.normalize(local_feat_1_bn, dim=1, p=2)
-                l2_n = torch.nn.functional.normalize(local_feat_2_bn, dim=1, p=2)
-                l3_n = torch.nn.functional.normalize(local_feat_3_bn, dim=1, p=2)
-                l4_n = torch.nn.functional.normalize(local_feat_4_bn, dim=1, p=2)
+                feat_n = torch.nn.functional.normalize(cls_feat, dim=1, p=2)
+                l1_n = torch.nn.functional.normalize(cls_l1, dim=1, p=2)
+                l2_n = torch.nn.functional.normalize(cls_l2, dim=1, p=2)
+                l3_n = torch.nn.functional.normalize(cls_l3, dim=1, p=2)
+                l4_n = torch.nn.functional.normalize(cls_l4, dim=1, p=2)
                 return torch.cat([feat_n, l1_n, l2_n, l3_n, l4_n], dim=1)
             else:
                 feat_n = torch.nn.functional.normalize(global_feat, dim=1, p=2)

@@ -1,0 +1,99 @@
+# =============================================================================
+# Full Optimization Config (P0+P1 combined)
+# JPM+ArcFace + Circle Loss + AdamW + Feature Compression + Patch Drop + MixStyle
+#
+# Test-time feature dim: 5 x PROJ_DIM = 5 x 256 = 1280 (down from 3840)
+# =============================================================================
+
+MODEL:
+  PRETRAIN_CHOICE: 'imagenet'
+  PRETRAIN_PATH: './jx_vit_base_p16_224-80ecf9dd.pth'
+  METRIC_LOSS_TYPE: 'circle'           # Circle Loss (feature-level)
+  IF_LABELSMOOTH: 'on'
+  IF_WITH_CENTER: 'no'
+  NAME: 'transformer'
+  NO_MARGIN: True
+  DEVICE_ID: ('0')
+  TRANSFORMER_TYPE: 'vit_base_patch16_224_TransReID'
+  STRIDE_SIZE: [12, 12]
+  SIE_CAMERA: True
+  SIE_COE: 3.0
+  JPM: True
+  RE_ARRANGE: True
+  ID_LOSS_TYPE: 'arcface'
+  ID_LOSS_WEIGHT: 1.0
+  TRIPLET_LOSS_WEIGHT: 1.0        # reused as Circle Loss weight
+  # Feature compression: 0 = disabled (full 3840-dim for best accuracy)
+  PROJ_DIM: 0
+  # P1-5a: Random Patch Drop
+  PATCH_DROP_PROB: 0.2             # drop 20% of patch tokens (occlusion sim)
+  # P1-5b: MixStyle
+  MIXSTYLE_P: 0.3                  # 30% chance per block
+  MIXSTYLE_ALPHA: 0.1
+
+INPUT:
+  SIZE_TRAIN: [384, 128]
+  SIZE_TEST: [384, 128]
+  PROB: 0.5
+  RE_PROB: 0.5
+  CJ_PROB: 0.2
+  MB_PROB: 0.2
+  PADDING: 10
+  PIXEL_MEAN: [0.5, 0.5, 0.5]
+  PIXEL_STD: [0.5, 0.5, 0.5]
+
+DATASETS:
+  NAMES: ('ballshow')
+  ROOT_DIR: ('./data/BallShow')
+
+DATALOADER:
+  SAMPLER: 'softmax_triplet'
+  NUM_INSTANCE: 4
+  NUM_WORKERS: 8
+
+SOLVER:
+  OPTIMIZER_NAME: 'AdamW'
+  ADAM_BETAS: (0.9, 0.999)
+  MAX_EPOCHS: 180
+  BASE_LR: 0.00035
+  IMS_PER_BATCH: 64
+  WARMUP_METHOD: 'linear'
+  WARMUP_EPOCHS: 5
+  LARGE_FC_LR: False
+  CHECKPOINT_PERIOD: 20
+  LOG_PERIOD: 50
+  EVAL_PERIOD: 10
+  EVAL_BEST: True
+  WEIGHT_DECAY: 0.05
+  WEIGHT_DECAY_BIAS: 0.0
+  BIAS_LR_FACTOR: 1
+  MOMENTUM: 0.9
+  MARGIN: 0.3
+  CENTER_LR: 0.5
+  CENTER_LOSS_WEIGHT: 0.0005
+  COSINE_SCALE: 30
+  COSINE_MARGIN: 0.5
+  CIRCLE_S: 128.0
+  CIRCLE_M: 0.25
+  GRAD_CLIP: 1.0
+  TB_LOG: True
+  SEED: 1234
+
+TEST:
+  EVAL: True
+  IMS_PER_BATCH: 256
+  RE_RANKING: True
+  RERANK_K1: 20
+  RERANK_K2: 6
+  RERANK_LAMBDA: 0.3
+  MULTI_SCALE: True
+  SCALES: ([256, 128], [384, 128])
+  QE: True
+  QE_K: 10
+  QE_ALPHA: 3.0
+  QE_ITER: 1
+  WEIGHT: ''
+  NECK_FEAT: 'after'
+  FEAT_NORM: 'yes'
+
+OUTPUT_DIR: 'logs/BallShow_vit_all_optim'

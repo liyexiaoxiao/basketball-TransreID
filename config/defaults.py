@@ -53,6 +53,12 @@ _C.MODEL.COS_LAYER = False
 _C.MODEL.DROP_PATH = 0.1
 _C.MODEL.DROP_OUT = 0.0
 _C.MODEL.ATT_DROP_RATE = 0.0
+# Random Patch Drop probability (0 = disabled, 0.2 recommended for occlusion simulation)
+_C.MODEL.PATCH_DROP_PROB = 0.0
+# MixStyle: mix feature statistics between samples for domain generalization
+# p = probability per block, alpha = Beta distribution shape (smaller = stronger)
+_C.MODEL.MIXSTYLE_P = 0.0
+_C.MODEL.MIXSTYLE_ALPHA = 0.1
 _C.MODEL.TRANSFORMER_TYPE = 'None'
 _C.MODEL.STRIDE_SIZE = [16, 16]
 
@@ -62,6 +68,10 @@ _C.MODEL.SHIFT_NUM = 5
 _C.MODEL.SHUFFLE_GROUP = 2
 _C.MODEL.DEVIDE_LENGTH = 4
 _C.MODEL.RE_ARRANGE = True
+
+# Feature dimension compression: shared projection layer after BNNeck
+# 0 = disabled (3840-dim output). Recommended: 256 → 1280-dim, 128 → 640-dim
+_C.MODEL.PROJ_DIM = 0
 
 # SIE Parameter
 _C.MODEL.SIE_COE = 3.0
