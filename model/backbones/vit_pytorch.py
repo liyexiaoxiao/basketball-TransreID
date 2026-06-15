@@ -414,6 +414,9 @@ class TransReID(nn.Module):
         if 'state_dict' in param_dict:
             param_dict = param_dict['state_dict']
         for k, v in param_dict.items():
+            # Strip 'base.' prefix — handles checkpoints saved from full model wrapper
+            if k.startswith('base.'):
+                k = k[5:]
             if 'head' in k or 'dist' in k:
                 continue
             if 'patch_embed.proj.weight' in k and len(v.shape) < 4:
@@ -428,6 +431,9 @@ class TransReID(nn.Module):
                 v = resize_pos_embed(v, self.pos_embed, self.patch_embed.num_y, self.patch_embed.num_x)
             try:
                 self.state_dict()[k].copy_(v)
+            except KeyError:
+                # Key not in backbone (e.g. b1.*, bottleneck.* from full model checkpoint), skip silently
+                pass
             except:
                 print('===========================ERROR=========================')
                 print('shape do not match in k :{}: param_dict{} vs self.state_dict(){}'.format(k, v.shape, self.state_dict()[k].shape))

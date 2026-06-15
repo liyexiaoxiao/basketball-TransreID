@@ -13,11 +13,12 @@ def shuffle_unit(features, shift, group, begin=1):
     feature_random = torch.cat([features[:, begin-1+shift:], features[:, begin:begin-1+shift]], dim=1)
     x = feature_random
     # Patch Shuffle Operation
-    try:
-        x = x.view(batchsize, group, -1, dim)
-    except:
-        x = torch.cat([x, x[:, -2:-1, :]], dim=1)
-        x = x.view(batchsize, group, -1, dim)
+    num_patches = x.size(1)
+    # Pad with extra patches if num_patches not divisible by group
+    if num_patches % group != 0:
+        pad_len = group - (num_patches % group)
+        x = torch.cat([x, x[:, -pad_len:, :]], dim=1)
+    x = x.view(batchsize, group, -1, dim)
 
     x = torch.transpose(x, 1, 2).contiguous()
     x = x.view(batchsize, -1, dim)
@@ -253,6 +254,8 @@ class build_transformer_local(nn.Module):
 
         self.num_classes = num_classes
         self.ID_LOSS_TYPE = cfg.MODEL.ID_LOSS_TYPE
+
+        # Global classifier (may use ArcFace/CosFace/AMSoftmax/Circle for better discrimination)
         if self.ID_LOSS_TYPE == 'arcface':
             print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE,cfg.SOLVER.COSINE_SCALE,cfg.SOLVER.COSINE_MARGIN))
             self.classifier = Arcface(self.in_planes, self.num_classes,
@@ -272,14 +275,16 @@ class build_transformer_local(nn.Module):
         else:
             self.classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
             self.classifier.apply(weights_init_classifier)
-            self.classifier_1 = nn.Linear(self.in_planes, self.num_classes, bias=False)
-            self.classifier_1.apply(weights_init_classifier)
-            self.classifier_2 = nn.Linear(self.in_planes, self.num_classes, bias=False)
-            self.classifier_2.apply(weights_init_classifier)
-            self.classifier_3 = nn.Linear(self.in_planes, self.num_classes, bias=False)
-            self.classifier_3.apply(weights_init_classifier)
-            self.classifier_4 = nn.Linear(self.in_planes, self.num_classes, bias=False)
-            self.classifier_4.apply(weights_init_classifier)
+
+        # Local branch classifiers (always linear — used for JPM part features)
+        self.classifier_1 = nn.Linear(self.in_planes, self.num_classes, bias=False)
+        self.classifier_1.apply(weights_init_classifier)
+        self.classifier_2 = nn.Linear(self.in_planes, self.num_classes, bias=False)
+        self.classifier_2.apply(weights_init_classifier)
+        self.classifier_3 = nn.Linear(self.in_planes, self.num_classes, bias=False)
+        self.classifier_3.apply(weights_init_classifier)
+        self.classifier_4 = nn.Linear(self.in_planes, self.num_classes, bias=False)
+        self.classifier_4.apply(weights_init_classifier)
 
         self.bottleneck = nn.BatchNorm1d(self.in_planes)
         self.bottleneck.bias.requires_grad_(False)
@@ -350,14 +355,16 @@ class build_transformer_local(nn.Module):
         local_feat_4_bn = self.bottleneck_4(local_feat_4)
 
         if self.training:
+            # Global ID loss (may use ArcFace/CosFace/AMSoftmax/Circle)
             if self.ID_LOSS_TYPE in ('arcface', 'cosface', 'amsoftmax', 'circle'):
                 cls_score = self.classifier(feat, label)
             else:
                 cls_score = self.classifier(feat)
-                cls_score_1 = self.classifier_1(local_feat_1_bn)
-                cls_score_2 = self.classifier_2(local_feat_2_bn)
-                cls_score_3 = self.classifier_3(local_feat_3_bn)
-                cls_score_4 = self.classifier_4(local_feat_4_bn)
+            # Local branch ID loss (always linear classifiers)
+            cls_score_1 = self.classifier_1(local_feat_1_bn)
+            cls_score_2 = self.classifier_2(local_feat_2_bn)
+            cls_score_3 = self.classifier_3(local_feat_3_bn)
+            cls_score_4 = self.classifier_4(local_feat_4_bn)
             return [cls_score, cls_score_1, cls_score_2, cls_score_3,
                         cls_score_4
                         ], [global_feat, local_feat_1, local_feat_2, local_feat_3,

@@ -12,8 +12,17 @@ from .center_loss import CenterLoss
 
 def make_loss(cfg, num_classes):    # modified by gu
     sampler = cfg.DATALOADER.SAMPLER
-    feat_dim = 2048
+    # Auto-detect feature dimension based on backbone type
+    if cfg.MODEL.NAME == 'transformer':
+        if 'deit_small' in cfg.MODEL.TRANSFORMER_TYPE:
+            feat_dim = 384
+        else:
+            feat_dim = 768
+    else:
+        feat_dim = 2048
+    print('Using center loss with feat_dim: {}'.format(feat_dim))
     center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=True)  # center loss
+
     if 'triplet' in cfg.MODEL.METRIC_LOSS_TYPE:
         if cfg.MODEL.NO_MARGIN:
             triplet = TripletLoss()
@@ -29,47 +38,45 @@ def make_loss(cfg, num_classes):    # modified by gu
         xent = CrossEntropyLabelSmooth(num_classes=num_classes)
         print("label smooth on, numclasses:", num_classes)
 
+    def _compute_id_loss(score, target):
+        """Compute ID loss, handling both list (JPM) and single tensor."""
+        if isinstance(score, list):
+            if cfg.MODEL.IF_LABELSMOOTH == 'on':
+                ID_LOSS = [xent(scor, target) for scor in score[1:]]
+                ID_LOSS = sum(ID_LOSS) / len(ID_LOSS)
+                ID_LOSS = 0.5 * ID_LOSS + 0.5 * xent(score[0], target)
+            else:
+                ID_LOSS = [F.cross_entropy(scor, target) for scor in score[1:]]
+                ID_LOSS = sum(ID_LOSS) / len(ID_LOSS)
+                ID_LOSS = 0.5 * ID_LOSS + 0.5 * F.cross_entropy(score[0], target)
+        else:
+            if cfg.MODEL.IF_LABELSMOOTH == 'on':
+                ID_LOSS = xent(score, target)
+            else:
+                ID_LOSS = F.cross_entropy(score, target)
+        return ID_LOSS
+
+    def _compute_tri_loss(feat, target):
+        """Compute triplet loss, handling both list (JPM) and single tensor."""
+        if isinstance(feat, list):
+            TRI_LOSS = [triplet(feats, target)[0] for feats in feat[1:]]
+            TRI_LOSS = sum(TRI_LOSS) / len(TRI_LOSS)
+            TRI_LOSS = 0.5 * TRI_LOSS + 0.5 * triplet(feat[0], target)[0]
+        else:
+            TRI_LOSS = triplet(feat, target)[0]
+        return TRI_LOSS
+
     if sampler == 'softmax':
         def loss_func(score, feat, target):
             return F.cross_entropy(score, target)
 
     elif cfg.DATALOADER.SAMPLER == 'softmax_triplet':
         def loss_func(score, feat, target, target_cam):
-            if cfg.MODEL.METRIC_LOSS_TYPE == 'triplet':
-                if cfg.MODEL.IF_LABELSMOOTH == 'on':
-                    if isinstance(score, list):
-                        ID_LOSS = [xent(scor, target) for scor in score[1:]]
-                        ID_LOSS = sum(ID_LOSS) / len(ID_LOSS)
-                        ID_LOSS = 0.5 * ID_LOSS + 0.5 * xent(score[0], target)
-                    else:
-                        ID_LOSS = xent(score, target)
-
-                    if isinstance(feat, list):
-                            TRI_LOSS = [triplet(feats, target)[0] for feats in feat[1:]]
-                            TRI_LOSS = sum(TRI_LOSS) / len(TRI_LOSS)
-                            TRI_LOSS = 0.5 * TRI_LOSS + 0.5 * triplet(feat[0], target)[0]
-                    else:
-                            TRI_LOSS = triplet(feat, target)[0]
-
-                    return cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
-                               cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS
-                else:
-                    if isinstance(score, list):
-                        ID_LOSS = [F.cross_entropy(scor, target) for scor in score[1:]]
-                        ID_LOSS = sum(ID_LOSS) / len(ID_LOSS)
-                        ID_LOSS = 0.5 * ID_LOSS + 0.5 * F.cross_entropy(score[0], target)
-                    else:
-                        ID_LOSS = F.cross_entropy(score, target)
-
-                    if isinstance(feat, list):
-                            TRI_LOSS = [triplet(feats, target)[0] for feats in feat[1:]]
-                            TRI_LOSS = sum(TRI_LOSS) / len(TRI_LOSS)
-                            TRI_LOSS = 0.5 * TRI_LOSS + 0.5 * triplet(feat[0], target)[0]
-                    else:
-                            TRI_LOSS = triplet(feat, target)[0]
-
-                    return cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
-                               cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS
+            if 'triplet' in cfg.MODEL.METRIC_LOSS_TYPE:
+                ID_LOSS = _compute_id_loss(score, target)
+                TRI_LOSS = _compute_tri_loss(feat, target)
+                return cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
+                           cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS
             else:
                 print('expected METRIC_LOSS_TYPE should be triplet'
                       'but got {}'.format(cfg.MODEL.METRIC_LOSS_TYPE))

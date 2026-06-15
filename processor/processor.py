@@ -62,13 +62,23 @@ def do_train(cfg,
                 score, feat = model(img, target, cam_label=target_cam, view_label=target_view )
                 loss = loss_fn(score, feat, target, target_cam)
 
+                # Center loss: pull features of the same ID toward their class center
+                if cfg.MODEL.IF_WITH_CENTER == 'yes':
+                    # Use global feature for center loss (feat[0] when JPM, feat when standard)
+                    if isinstance(feat, list):
+                        center_feat = feat[0]
+                    else:
+                        center_feat = feat
+                    center_loss = center_criterion(center_feat, target)
+                    loss += cfg.SOLVER.CENTER_LOSS_WEIGHT * center_loss
+
             scaler.scale(loss).backward()
 
             scaler.step(optimizer)
             scaler.update()
             ema_model.update(model)
 
-            if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+            if cfg.MODEL.IF_WITH_CENTER == 'yes':
                 for param in center_criterion.parameters():
                     param.grad.data *= (1. / cfg.SOLVER.CENTER_LOSS_WEIGHT)
                 scaler.step(optimizer_center)
