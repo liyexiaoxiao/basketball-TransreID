@@ -19,7 +19,6 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
-    torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
 if __name__ == '__main__':
@@ -38,6 +37,8 @@ if __name__ == '__main__':
         cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     cfg.freeze()
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
 
     set_seed(cfg.SOLVER.SEED)
 
@@ -62,7 +63,6 @@ if __name__ == '__main__':
     if cfg.MODEL.DIST_TRAIN:
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
     train_loader, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
     model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num = view_num)

@@ -34,6 +34,7 @@ class MainWindow(QMainWindow):
         self.config_path = ""
         self.weight_path = ""
         self.query_path = ""
+        self._search_start_time = 0.0
         
         self.init_ui()
         self.apply_dark_theme()
@@ -622,49 +623,60 @@ class MainWindow(QMainWindow):
         self.btn_search.setEnabled(False)
         self.btn_search.setText("Searching...")
         self.lbl_search_summary.setText("Searching gallery database...")
-        
+
         # Clear previous results grid
         while self.grid_results.count():
             child = self.grid_results.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-                
+
+        # Stop previous search thread if still running
+        if self.search_thread is not None and self.search_thread.isRunning():
+            self.search_thread.requestInterruption()
+            self.search_thread.wait(1000)
+        # Disconnect old signal connections to prevent leaks
+        if self.search_thread is not None:
+            try:
+                self.search_thread.finished_signal.disconnect()
+            except TypeError:
+                pass  # No connections yet
+
         top_k = self.spin_topk.value()
-        
-        start_time = time.time()
+
+        self._search_start_time = time.time()
         self.search_thread = QuerySearchThread(self.query_path, top_k)
         self.search_thread.log_signal.connect(self.log_viewer.append_log)
-        
-        # We define search finish handler taking execution time
-        def on_search_done(success, q_path, results):
-            elapsed = time.time() - start_time
-            self.btn_search.setEnabled(True)
-            self.btn_search.setText("Search & Match")
-            
-            if success:
-                self.lbl_search_summary.setText(f"Retrieved top {len(results)} matches in {elapsed:.3f} seconds.")
-                
-                # Display matches in a nice grid (5 columns)
-                cols = 5
-                for idx, res in enumerate(results):
-                    row = idx // cols
-                    col = idx % cols
-                    
-                    card = ImageCard(
-                        image_path=res["path"],
-                        pid=res["pid"],
-                        camid=res["camid"],
-                        score=res["similarity"],
-                        is_same_id=res["is_same_id"],
-                        parent=self.results_container
-                    )
-                    self.grid_results.addWidget(card, row, col)
-            else:
-                self.lbl_search_summary.setText("Search failed. Check logs.")
-                QMessageBox.critical(self, "Search Error", q_path) # q_path acts as error message in failure
-                
-        self.search_thread.finished_signal.connect(on_search_done)
+        self.search_thread.finished_signal.connect(self._on_search_done)
         self.search_thread.start()
+
+    @pyqtSlot(bool, str, list)
+    def _on_search_done(self, success, q_path, results):
+        """Handle search completion without leaking signal connections."""
+        elapsed = time.time() - self._search_start_time
+        self.btn_search.setEnabled(True)
+        self.btn_search.setText("Search & Match")
+
+        if success:
+            self.lbl_search_summary.setText(f"Retrieved top {len(results)} matches in {elapsed:.3f} seconds.")
+
+            # Display matches in a grid (5 columns)
+            cols = 5
+            for idx, res in enumerate(results):
+                row = idx // cols
+                col = idx % cols
+
+                card = ImageCard(
+                    image_path=res["path"],
+                    pid=res["pid"],
+                    camid=res["camid"],
+                    score=res["similarity"],
+                    is_same_id=res["is_same_id"],
+                    parent=self.results_container
+                )
+                self.grid_results.addWidget(card, row, col)
+        else:
+            self.lbl_search_summary.setText("Search failed. Check logs.")
+            QMessageBox.critical(self, "Search Error", q_path)
 
     # ==========================================
     # ACTION: RUN BATCH EVALUATION
@@ -718,9 +730,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Evaluation Error", log_summary)
             
     def closeEvent(self, event):
-        # Cleanup running threads on window exit
+        # Cleanup running threads on window exit (cooperative shutdown)
         for thread in [self.load_thread, self.extract_thread, self.search_thread, self.eval_thread]:
             if thread is not None and thread.isRunning():
-                thread.terminate()
-                thread.wait()
+                thread.requestInterruption()
+                # Wait gracefully for up to 3 seconds
+                if not thread.wait(3000):
+                    # Force terminate only as last resort
+                    self.log_viewer.append_log("Warning: Force-terminating unresponsive thread.")
+                    thread.terminate()
+                    thread.wait()
         event.accept()

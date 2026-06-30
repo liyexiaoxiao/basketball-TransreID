@@ -4,6 +4,20 @@ import cv2
 import numpy as np
 from PIL import Image
 
+# Cache for np.meshgrid results keyed by (H, W) to avoid repeated allocations
+_meshgrid_cache = {}
+
+
+def _get_meshgrid(h, w):
+    """Return cached meshgrid for given dimensions."""
+    key = (h, w)
+    if key not in _meshgrid_cache:
+        x = np.linspace(-1, 1, w)
+        y = np.linspace(-1, 1, h)
+        xx, yy = np.meshgrid(x, y)
+        _meshgrid_cache[key] = (xx, yy)
+    return _meshgrid_cache[key]
+
 
 class ComposeNP:
     """Compose multiple NumPy-based transforms efficiently.
@@ -32,53 +46,6 @@ class ComposeNP:
 
     def __repr__(self):
         return 'ComposeNP([' + ', '.join(str(t) for t in self.transforms) + '])'
-
-
-class RandomErasing(object):
-    """ Randomly selects a rectangle region in an image and erases its pixels.
-        'Random Erasing Data Augmentation' by Zhong et al.
-        See https://arxiv.org/pdf/1708.04896.pdf
-    Args:
-         probability: The probability that the Random Erasing operation will be performed.
-         sl: Minimum proportion of erased area against input image.
-         sh: Maximum proportion of erased area against input image.
-         r1: Minimum aspect ratio of erased area.
-         mean: Erasing value.
-    """
-
-    def __init__(self, probability=0.5, sl=0.02, sh=0.4, r1=0.3, mean=(0.4914, 0.4822, 0.4465)):
-        self.probability = probability
-        self.mean = mean
-        self.sl = sl
-        self.sh = sh
-        self.r1 = r1
-
-    def __call__(self, img):
-
-        if random.uniform(0, 1) >= self.probability:
-            return img
-
-        for attempt in range(100):
-            area = img.size()[1] * img.size()[2]
-
-            target_area = random.uniform(self.sl, self.sh) * area
-            aspect_ratio = random.uniform(self.r1, 1 / self.r1)
-
-            h = int(round(math.sqrt(target_area * aspect_ratio)))
-            w = int(round(math.sqrt(target_area / aspect_ratio)))
-
-            if w < img.size()[2] and h < img.size()[1]:
-                x1 = random.randint(0, img.size()[1] - h)
-                y1 = random.randint(0, img.size()[2] - w)
-                if img.size()[0] == 3:
-                    img[0, x1:x1 + h, y1:y1 + w] = self.mean[0]
-                    img[1, x1:x1 + h, y1:y1 + w] = self.mean[1]
-                    img[2, x1:x1 + h, y1:y1 + w] = self.mean[2]
-                else:
-                    img[0, x1:x1 + h, y1:y1 + w] = self.mean[0]
-                return img
-
-        return img
 
 
 class RandomMotionBlur(object):
@@ -154,10 +121,13 @@ class RandomDirectionalLighting(object):
         # generate a gradient direction
         angle = random.uniform(0, 2 * np.pi)
         
-        # coordinate grid for the image
-        x = np.linspace(-1, 1, w)
-        y = np.linspace(-1, 1, h)
-        xx, yy = np.meshgrid(x, y)
+        # coordinate grid for the image (cached by size)
+        key = (h, w, 'linspace')
+        if key not in _meshgrid_cache:
+            x = np.linspace(-1, 1, w)
+            y = np.linspace(-1, 1, h)
+            _meshgrid_cache[key] = np.meshgrid(x, y)
+        xx, yy = _meshgrid_cache[key]
         
         # gradient: a * x + b * y
         grad = xx * np.cos(angle) + yy * np.sin(angle)  
@@ -271,9 +241,13 @@ class RandomBackgroundBlur(object):
         rx = w * random.uniform(0.35, 0.5)
         ry = h * random.uniform(0.35, 0.5)
         
-        x = np.arange(0, w)
-        y = np.arange(0, h)
-        xx, yy = np.meshgrid(x, y)
+        # coordinate grid (cached by size)
+        key = (h, w, 'arange')
+        if key not in _meshgrid_cache:
+            x = np.arange(0, w)
+            y = np.arange(0, h)
+            _meshgrid_cache[key] = np.meshgrid(x, y)
+        xx, yy = _meshgrid_cache[key]
         
         dist = ((xx - cx) / rx)**2 + ((yy - cy) / ry)**2
         

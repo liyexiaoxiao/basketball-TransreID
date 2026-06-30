@@ -83,6 +83,10 @@ def do_train(cfg,
     best_mAP = 0.0
     best_epoch = 0
 
+    # Hoist loop-invariant checks for efficiency
+    use_center_loss = 'center' in cfg.MODEL.METRIC_LOSS_TYPE
+    score_is_list = cfg.MODEL.JPM
+
     # train
     for epoch in range(1, epochs + 1):
         start_time = time.time()
@@ -93,7 +97,7 @@ def do_train(cfg,
         model.train()
         for n_iter, (img, vid, target_cam, target_view) in enumerate(train_loader):
             optimizer.zero_grad()
-            if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+            if use_center_loss:
                 optimizer_center.zero_grad()
             img = img.to(device)
             target = vid.to(device)
@@ -111,16 +115,15 @@ def do_train(cfg,
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
 
             scaler.step(optimizer)
-            scaler.update()
             ema_model.update(model)
 
-            if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+            if use_center_loss:
                 for param in center_criterion.parameters():
                     param.grad.data *= (1. / cfg.SOLVER.CENTER_LOSS_WEIGHT)
                 scaler.step(optimizer_center)
-                scaler.update()
+            scaler.update()
 
-            if isinstance(score, list):
+            if score_is_list:
                 acc = (score[0].max(1)[1] == target).float().mean()
             else:
                 acc = (score.max(1)[1] == target).float().mean()
@@ -128,7 +131,6 @@ def do_train(cfg,
             loss_meter.update(loss.item(), img.shape[0])
             acc_meter.update(acc, 1)
 
-            torch.cuda.synchronize()
             if (n_iter + 1) % log_period == 0:
                 current_lr = scheduler.get_epoch_values(epoch)
                 if current_lr is not None and len(current_lr) > 0:
@@ -281,7 +283,7 @@ def do_inference(cfg,
         logger.info("Using Multi-Scale Models: {}".format(list(getattr(cfg.TEST, 'SCALES', []))))
 
     for n_iter, (img, pid, camid, camids, target_view, imgpath) in enumerate(val_loader):
-        with torch.no_grad():
+        with torch.no_grad(), amp.autocast(enabled=True):
             img = img.to(device)
             camids = camids.to(device)
             target_view = target_view.to(device)

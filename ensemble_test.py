@@ -76,18 +76,16 @@ if __name__ == "__main__":
     _, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
     # Extract features and compute distance matrix from each model
+    # Create model once, reuse for all checkpoints to avoid repeated allocation
+    model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
     distmats = []
     for i, weight_path in enumerate(weight_list):
         logger.info("Loading model {}: {}".format(i + 1, weight_path))
-        model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
         model.load_param(weight_path)
         model.to(device)
 
         feats, pids, camids = extract_features_with_tta(model, val_loader, device)
         logger.info("Extracted features shape: {}".format(feats.shape))
-
-        del model
-        torch.cuda.empty_cache()
 
         # Normalize features
         feats = torch.nn.functional.normalize(feats, dim=1, p=2)
@@ -95,7 +93,7 @@ if __name__ == "__main__":
         # Split query / gallery
         qf = feats[:num_query]
         gf = feats[num_query:]
-        
+
         if i == 0:
             q_pids = np.asarray(pids[:num_query])
             q_camids = np.asarray(camids[:num_query])
@@ -104,6 +102,11 @@ if __name__ == "__main__":
 
         distmat = euclidean_distance(qf, gf)
         distmats.append(distmat)
+        logger.info("Model {} done ({}/{})".format(i + 1, i + 1, len(weight_list)))
+
+    # Clean up
+    del model
+    torch.cuda.empty_cache()
 
     # Average distance matrices (score-level fusion)
     logger.info("Averaging distance matrices from {} models".format(len(distmats)))

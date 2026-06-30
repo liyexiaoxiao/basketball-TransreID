@@ -1,10 +1,27 @@
 import os
 from PyQt5.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit, 
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit,
     QListWidget, QListWidgetItem, QLineEdit, QSplitter
 )
 from PyQt5.QtGui import QPixmap, QIcon, QColor, QFont
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRunnable, QThreadPool
+
+THUMBNAIL_SIZE = QSize(90, 110)
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png')
+
+
+class _ThumbnailLoader(QRunnable):
+    """Background thumbnail loader — avoids blocking the GUI thread."""
+    def __init__(self, item, path):
+        super().__init__()
+        self.item = item
+        self.path = path
+
+    def run(self):
+        pixmap = QPixmap(self.path)
+        if not pixmap.isNull():
+            thumbnail = pixmap.scaled(THUMBNAIL_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.item.setIcon(QIcon(thumbnail))  # setIcon is thread-safe in Qt
 
 class ImageCard(QFrame):
     """
@@ -214,33 +231,28 @@ class DatasetListWidget(QFrame):
     def load_images(self):
         self.list_widget.clear()
         self.all_items = []
-        
+
         if not os.path.exists(self.directory_path):
             return
-            
-        extensions = ('.jpg', '.jpeg', '.png')
-        files = sorted([f for f in os.listdir(self.directory_path) if f.lower().endswith(extensions)])
-        
+
+        files = sorted([f for f in os.listdir(self.directory_path) if f.lower().endswith(IMAGE_EXTENSIONS)])
+
+        pool = QThreadPool.globalInstance()
         for file in files:
             full_path = os.path.join(self.directory_path, file)
-            # Make a QListWidgetItem
             item = QListWidgetItem()
             item.setData(Qt.UserRole, full_path)
-            
-            # Text layout: ID
-            # e.g., 0056_c1s2_000016_01.jpg
-            pid = "Unknown"
-            if "_" in file:
-                pid = file.split("_")[0]
+
+            # Text layout: ID (e.g., 0056_c1s2_000016_01.jpg)
+            pid = file.split("_")[0] if "_" in file else "Unknown"
             item.setText(f"Player: {pid}")
             item.setFont(QFont("Segoe UI", 9, QFont.Bold))
             item.setTextAlignment(Qt.AlignCenter)
-            
-            # Load thumbnail (lazy load or quick scaled)
-            pixmap = QPixmap(full_path)
-            thumbnail = pixmap.scaled(90, 110, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            item.setIcon(QIcon(thumbnail))
-            
+
+            # Load thumbnail asynchronously to avoid blocking the GUI
+            loader = _ThumbnailLoader(item, full_path)
+            pool.start(loader)
+
             self.list_widget.addItem(item)
             self.all_items.append((pid, item))
 

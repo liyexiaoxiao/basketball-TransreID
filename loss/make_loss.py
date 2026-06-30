@@ -26,9 +26,12 @@ def make_loss(cfg, num_classes):
     else:
         feat_dim = 2048
 
-    # ── Center Loss (only when explicitly requested) ────────────────────────
-    center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=True)
-    print(f"CenterLoss initialized with feat_dim={feat_dim}, num_classes={num_classes}")
+    # ── Center Loss (lazy — only allocate when explicitly requested) ──────────
+    if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+        center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=True)
+        print(f"CenterLoss initialized with feat_dim={feat_dim}, num_classes={num_classes}")
+    else:
+        center_criterion = None
 
     # ── Metric Loss ─────────────────────────────────────────────────────────
     metric_loss_type = cfg.MODEL.METRIC_LOSS_TYPE
