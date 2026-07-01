@@ -22,7 +22,7 @@ from utils.metrics import R1_mAP_eval, euclidean_distance, eval_func
 
 
 def extract_features_with_tta(model, val_loader, device):
-    """Extract features using TTA (horizontal flip)."""
+    """Extract features using TTA (horizontal flip) with AMP for speed."""
     model.eval()
     feats_list = []
     pids_list = []
@@ -33,11 +33,12 @@ def extract_features_with_tta(model, val_loader, device):
             img = img.to(device)
             camids_dev = camids.to(device)
             target_view = target_view.to(device)
-            # Original
-            feat = model(img, cam_label=camids_dev, view_label=target_view)
-            # Horizontal flip TTA
-            feat_flip = model(torch.flip(img, dims=[3]), cam_label=camids_dev, view_label=target_view)
-            feat = (feat + feat_flip) / 2.0
+            with torch.cuda.amp.autocast(enabled=True):
+                # Original
+                feat = model(img, cam_label=camids_dev, view_label=target_view)
+                # Horizontal flip TTA
+                feat_flip = model(torch.flip(img, dims=[3]), cam_label=camids_dev, view_label=target_view)
+            feat = (feat.float() + feat_flip.float()) / 2.0
 
             feats_list.append(feat.cpu())
             pids_list.extend(np.asarray(pid))
@@ -74,71 +75,39 @@ if __name__ == "__main__":
     os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
     device = "cuda"
 
-    train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+    _, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
-    if args.fusion == "feature":
-        # Feature-level fusion: average features from all models, then compute distance
-        all_feats = []
-        for i, weight_path in enumerate(weight_list):
-            logger.info("Loading model {}: {}".format(i + 1, weight_path))
-            model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
-            model.load_param(weight_path)
-            model.to(device)
+    # Extract features and compute distance matrix from each model
+    # Create model once, reuse for all checkpoints to avoid repeated allocation
+    model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
+    distmats = []
+    for i, weight_path in enumerate(weight_list):
+        logger.info("Loading model {}: {}".format(i + 1, weight_path))
+        model.load_param(weight_path)
+        model.to(device)
 
-            feats, pids, camids = extract_features_with_tta(model, val_loader, device)
-            logger.info("Extracted features shape: {}".format(feats.shape))
+        feats, pids, camids = extract_features_with_tta(model, val_loader, device)
+        logger.info("Extracted features shape: {}".format(feats.shape))
 
-            del model
-            torch.cuda.empty_cache()
-
-            # L2-normalize independently before averaging
             feats = torch.nn.functional.normalize(feats, dim=1, p=2)
-            all_feats.append(feats)
 
-            if i == 0:
-                q_pids = np.asarray(pids[:num_query])
-                q_camids = np.asarray(camids[:num_query])
-                g_pids = np.asarray(pids[num_query:])
-                g_camids = np.asarray(camids[num_query:])
+        # Split query / gallery
+        qf = feats[:num_query]
+        gf = feats[num_query:]
 
-        # Average normalized features across models (feature-level fusion)
-        logger.info("Averaging features from {} models".format(len(all_feats)))
-        avg_feats = sum(all_feats) / len(all_feats)
-        # Re-normalize after averaging
-        avg_feats = torch.nn.functional.normalize(avg_feats, dim=1, p=2)
+        if i == 0:
+            q_pids = np.asarray(pids[:num_query])
+            q_camids = np.asarray(camids[:num_query])
+            g_pids = np.asarray(pids[num_query:])
+            g_camids = np.asarray(camids[num_query:])
 
-        qf = avg_feats[:num_query]
-        gf = avg_feats[num_query:]
         distmat = euclidean_distance(qf, gf)
+        distmats.append(distmat)
+        logger.info("Model {} done ({}/{})".format(i + 1, i + 1, len(weight_list)))
 
-    else:
-        # Score-level fusion: average distance matrices (original behavior)
-        distmats = []
-        for i, weight_path in enumerate(weight_list):
-            logger.info("Loading model {}: {}".format(i + 1, weight_path))
-            model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num=view_num)
-            model.load_param(weight_path)
-            model.to(device)
-
-            feats, pids, camids = extract_features_with_tta(model, val_loader, device)
-            logger.info("Extracted features shape: {}".format(feats.shape))
-
-            del model
-            torch.cuda.empty_cache()
-
-            feats = torch.nn.functional.normalize(feats, dim=1, p=2)
-
-            qf = feats[:num_query]
-            gf = feats[num_query:]
-
-            if i == 0:
-                q_pids = np.asarray(pids[:num_query])
-                q_camids = np.asarray(camids[:num_query])
-                g_pids = np.asarray(pids[num_query:])
-                g_camids = np.asarray(camids[num_query:])
-
-            distmat = euclidean_distance(qf, gf)
-            distmats.append(distmat)
+    # Clean up
+    del model
+    torch.cuda.empty_cache()
 
         logger.info("Averaging distance matrices from {} models".format(len(distmats)))
         distmat = sum(distmats) / len(distmats)

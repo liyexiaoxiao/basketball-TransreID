@@ -167,7 +167,7 @@ class Attention(nn.Module):
 class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, mixstyle_p=0.0, mixstyle_alpha=0.1):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
@@ -177,9 +177,18 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        # ── MixStyle (domain generalization) ──────────────────────────────
+        if mixstyle_p > 0:
+            from .mixstyle import MixStyle
+            self.mixstyle = MixStyle(p=mixstyle_p, alpha=mixstyle_alpha)
+        else:
+            self.mixstyle = None
 
     def forward(self, x):
-        x = x + self.drop_path(self.attn(self.norm1(x)))
+        x_norm = self.norm1(x)
+        if self.mixstyle is not None:
+            x_norm = self.mixstyle(x_norm)
+        x = x + self.drop_path(self.attn(x_norm))
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 
@@ -293,11 +302,13 @@ class TransReID(nn.Module):
     """
     def __init__(self, img_size=224, patch_size=16, stride_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0., camera=0, view=0,
-                 drop_path_rate=0., hybrid_backbone=None, norm_layer=nn.LayerNorm, local_feature=False, sie_xishu =1.0):
+                 drop_path_rate=0., hybrid_backbone=None, norm_layer=nn.LayerNorm, local_feature=False, sie_xishu=1.0,
+                 patch_drop_prob=0.0, mixstyle_p=0.0, mixstyle_alpha=0.1):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.local_feature = local_feature
+        self.patch_drop_prob = patch_drop_prob
         if hybrid_backbone is not None:
             self.patch_embed = HybridEmbed(
                 hybrid_backbone, img_size=img_size, in_chans=in_chans, embed_dim=embed_dim)
@@ -310,6 +321,14 @@ class TransReID(nn.Module):
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+
+        # ── Patch Drop (Random Token Erasing for ViT) ──────────────────────────
+        if self.patch_drop_prob > 0:
+            self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+            trunc_normal_(self.mask_token, std=.02)
+            print(f'using patch_drop with probability: {self.patch_drop_prob}')
+        else:
+            self.mask_token = None
         self.cam_num = camera
         self.view_num = view
         self.sie_xishu = sie_xishu
@@ -340,7 +359,8 @@ class TransReID(nn.Module):
         self.blocks = nn.ModuleList([
             Block(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
+                mixstyle_p=mixstyle_p, mixstyle_alpha=mixstyle_alpha)
             for i in range(depth)])
 
         self.norm = norm_layer(embed_dim)
@@ -375,6 +395,15 @@ class TransReID(nn.Module):
     def forward_features(self, x, camera_id, view_id):
         B = x.shape[0]
         x = self.patch_embed(x)
+
+        # ── Random Patch Drop (simulates occlusion) ──────────────────────────
+        if self.training and self.mask_token is not None:
+            N = x.shape[1]  # number of patches
+            # Random binary mask: 1 = keep, 0 = drop
+            mask = torch.rand(B, N, 1, device=x.device) >= self.patch_drop_prob
+            # Replace dropped patches with learnable mask token
+            mask_tokens = self.mask_token.expand(B, N, -1)
+            x = x * mask.float() + mask_tokens * (1 - mask.float())
 
         cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
         x = torch.cat((cls_tokens, x), dim=1)
@@ -450,28 +479,31 @@ def resize_pos_embed(posemb, posemb_new, hight, width):
     return posemb
 
 
-def vit_base_patch16_224_TransReID(img_size=(256, 128), stride_size=16, drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=0.1, camera=0, view=0,local_feature=False,sie_xishu=1.5, **kwargs):
+def vit_base_patch16_224_TransReID(img_size=(256, 128), stride_size=16, drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=0.1, camera=0, view=0,local_feature=False,sie_xishu=1.5, patch_drop_prob=0.0, mixstyle_p=0.0, mixstyle_alpha=0.1, **kwargs):
     model = TransReID(
         img_size=img_size, patch_size=16, stride_size=stride_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,\
         camera=camera, view=view, drop_path_rate=drop_path_rate, drop_rate=drop_rate, attn_drop_rate=attn_drop_rate,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),  sie_xishu=sie_xishu, local_feature=local_feature, **kwargs)
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),  sie_xishu=sie_xishu, local_feature=local_feature,
+        patch_drop_prob=patch_drop_prob, mixstyle_p=mixstyle_p, mixstyle_alpha=mixstyle_alpha, **kwargs)
 
     return model
 
-def vit_small_patch16_224_TransReID(img_size=(256, 128), stride_size=16, drop_rate=0., attn_drop_rate=0.,drop_path_rate=0.1, camera=0, view=0, local_feature=False, sie_xishu=1.5, **kwargs):
+def vit_small_patch16_224_TransReID(img_size=(256, 128), stride_size=16, drop_rate=0., attn_drop_rate=0.,drop_path_rate=0.1, camera=0, view=0, local_feature=False, sie_xishu=1.5, patch_drop_prob=0.0, mixstyle_p=0.0, mixstyle_alpha=0.1, **kwargs):
     kwargs.setdefault('qk_scale', 768 ** -0.5)
     model = TransReID(
         img_size=img_size, patch_size=16, stride_size=stride_size, embed_dim=768, depth=8, num_heads=8,  mlp_ratio=3., qkv_bias=False, drop_path_rate = drop_path_rate,\
         camera=camera, view=view,  drop_rate=drop_rate, attn_drop_rate=attn_drop_rate,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),  sie_xishu=sie_xishu, local_feature=local_feature, **kwargs)
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),  sie_xishu=sie_xishu, local_feature=local_feature,
+        patch_drop_prob=patch_drop_prob, mixstyle_p=mixstyle_p, mixstyle_alpha=mixstyle_alpha, **kwargs)
 
     return model
 
-def deit_small_patch16_224_TransReID(img_size=(256, 128), stride_size=16, drop_path_rate=0.1, drop_rate=0.0, attn_drop_rate=0.0, camera=0, view=0, local_feature=False, sie_xishu=1.5, **kwargs):
+def deit_small_patch16_224_TransReID(img_size=(256, 128), stride_size=16, drop_path_rate=0.1, drop_rate=0.0, attn_drop_rate=0.0, camera=0, view=0, local_feature=False, sie_xishu=1.5, patch_drop_prob=0.0, mixstyle_p=0.0, mixstyle_alpha=0.1, **kwargs):
     model = TransReID(
         img_size=img_size, patch_size=16, stride_size=stride_size, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True,
         drop_path_rate=drop_path_rate, drop_rate=drop_rate, attn_drop_rate=attn_drop_rate, camera=camera, view=view, sie_xishu=sie_xishu, local_feature=local_feature,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        patch_drop_prob=patch_drop_prob, mixstyle_p=mixstyle_p, mixstyle_alpha=mixstyle_alpha, **kwargs)
 
     return model
 

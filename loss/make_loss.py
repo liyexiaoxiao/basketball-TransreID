@@ -1,109 +1,128 @@
 # encoding: utf-8
 """
-@author:  liaoxingyu
-@contact: sherlockliao01@gmail.com
+Loss function factory.
+
+Supports:
+  - ID Loss:   Softmax, ArcFace/Cosface/AMSoftmax/Circle (set in model via ID_LOSS_TYPE)
+  - Metric Loss: Triplet, Triplet+Center, Circle
+  - Label Smoothing (configurable via IF_LABELSMOOTH)
 """
 
 import torch.nn.functional as F
 from .softmax_loss import CrossEntropyLabelSmooth, LabelSmoothingCrossEntropy
 from .triplet_loss import TripletLoss
 from .center_loss import CenterLoss
+from .circular_loss import CircleMetricLoss
 
 
-def make_loss(cfg, num_classes):    # modified by gu
+def make_loss(cfg, num_classes):
     sampler = cfg.DATALOADER.SAMPLER
-    # Feature dim: ViT-Base=768, ViT-Small/DeiT-Small=384, ResNet50=2048
+
+    # ── Auto-detect feature dimension ──────────────────────────────────────
     if cfg.MODEL.NAME == 'transformer':
-        if 'small' in cfg.MODEL.TRANSFORMER_TYPE:
+        feat_dim = 768
+        if cfg.MODEL.TRANSFORMER_TYPE and 'deit_small' in cfg.MODEL.TRANSFORMER_TYPE:
             feat_dim = 384
-        else:
-            feat_dim = 768
     else:
         feat_dim = 2048
-    center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=True)  # center loss
-    if 'triplet' in cfg.MODEL.METRIC_LOSS_TYPE:
+
+    # ── Center Loss (lazy — only allocate when explicitly requested) ──────────
+    if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
+        center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=True)
+        print(f"CenterLoss initialized with feat_dim={feat_dim}, num_classes={num_classes}")
+    else:
+        center_criterion = None
+
+    # ── Metric Loss ─────────────────────────────────────────────────────────
+    metric_loss_type = cfg.MODEL.METRIC_LOSS_TYPE
+
+    if 'circle' in metric_loss_type:
+        circle_s = getattr(cfg.SOLVER, 'CIRCLE_S', 256.0)
+        circle_m = getattr(cfg.SOLVER, 'CIRCLE_M', 0.25)
+        metric_loss_fn = CircleMetricLoss(scale=circle_s, margin=circle_m)
+        print(f"using Circle Loss (feature-level) with scale={circle_s}, margin={circle_m}")
+
+    elif 'triplet' in metric_loss_type:
         if cfg.MODEL.NO_MARGIN:
-            triplet = TripletLoss()
+            metric_loss_fn = TripletLoss()
             print("using soft triplet loss for training")
         else:
-            triplet = TripletLoss(cfg.SOLVER.MARGIN)  # triplet loss
+            metric_loss_fn = TripletLoss(cfg.SOLVER.MARGIN)
             print("using triplet loss with margin:{}".format(cfg.SOLVER.MARGIN))
     else:
-        print('expected METRIC_LOSS_TYPE should be triplet'
-              'but got {}'.format(cfg.MODEL.METRIC_LOSS_TYPE))
+        print('expected METRIC_LOSS_TYPE should be triplet, triplet_center, or circle'
+              ' but got {}'.format(metric_loss_type))
 
+    # ── Label Smoothing ─────────────────────────────────────────────────────
     if cfg.MODEL.IF_LABELSMOOTH == 'on':
         xent = CrossEntropyLabelSmooth(num_classes=num_classes)
         print("label smooth on, numclasses:", num_classes)
 
+    # ── Helper: compute weighted ID loss across branches ────────────────────
+    def _compute_id_loss(score, target):
+        """Compute ID loss, handling both single-tensor and list-of-tensors."""
+        if isinstance(score, list):
+            if cfg.MODEL.IF_LABELSMOOTH == 'on':
+                branch_losses = [xent(s, target) for s in score[1:]]
+                avg_local = sum(branch_losses) / len(branch_losses)
+                return 0.5 * avg_local + 0.5 * xent(score[0], target)
+            else:
+                branch_losses = [F.cross_entropy(s, target) for s in score[1:]]
+                avg_local = sum(branch_losses) / len(branch_losses)
+                return 0.5 * avg_local + 0.5 * F.cross_entropy(score[0], target)
+        else:
+            if cfg.MODEL.IF_LABELSMOOTH == 'on':
+                return xent(score, target)
+            else:
+                return F.cross_entropy(score, target)
+
+    # ── Helper: compute weighted metric loss across branches ────────────────
+    def _compute_metric_loss(feat, target):
+        """Compute metric loss, handling both single-tensor and list-of-tensors."""
+        if isinstance(feat, list):
+            branch_losses = [metric_loss_fn(f, target)[0] for f in feat[1:]]
+            avg_local = sum(branch_losses) / len(branch_losses)
+            return 0.5 * avg_local + 0.5 * metric_loss_fn(feat[0], target)[0]
+        else:
+            return metric_loss_fn(feat, target)[0]
+
+    # ── Helper: compute center loss ─────────────────────────────────────────
+    def _compute_center_loss(feat, target):
+        """Center loss on global branch only (feat[0] for JPM, feat itself otherwise)."""
+        if isinstance(feat, list):
+            return center_criterion(feat[0], target)
+        else:
+            return center_criterion(feat, target)
+
+    # ── Build loss function closure ─────────────────────────────────────────
     if sampler == 'softmax':
         def loss_func(score, feat, target):
             return F.cross_entropy(score, target)
 
-    elif cfg.DATALOADER.SAMPLER == 'softmax_triplet':
+    elif sampler == 'softmax_triplet':
         def loss_func(score, feat, target, target_cam):
-            if cfg.MODEL.METRIC_LOSS_TYPE in ('triplet', 'triplet_center'):
-                if cfg.MODEL.IF_LABELSMOOTH == 'on':
-                    if isinstance(score, list):
-                        ID_LOSS = [xent(scor, target) for scor in score[1:]]
-                        ID_LOSS = sum(ID_LOSS) / len(ID_LOSS)
-                        ID_LOSS = 0.5 * ID_LOSS + 0.5 * xent(score[0], target)
-                    else:
-                        ID_LOSS = xent(score, target)
+            valid_types = ('triplet', 'triplet_center', 'circle', 'circle_center')
 
-                    if isinstance(feat, list):
-                            TRI_LOSS = [triplet(feats, target)[0] for feats in feat[1:]]
-                            TRI_LOSS = sum(TRI_LOSS) / len(TRI_LOSS)
-                            TRI_LOSS = 0.5 * TRI_LOSS + 0.5 * triplet(feat[0], target)[0]
-                    else:
-                            TRI_LOSS = triplet(feat, target)[0]
+            if metric_loss_type in valid_types:
+                # Core losses
+                id_loss = _compute_id_loss(score, target)
+                metric_loss = _compute_metric_loss(feat, target)
 
-                    total_loss = cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
-                               cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS
+                total_loss = (cfg.MODEL.ID_LOSS_WEIGHT * id_loss +
+                              cfg.MODEL.TRIPLET_LOSS_WEIGHT * metric_loss)
 
-                    # Center loss: pull global features toward class centers
-                    # Only global branch — JPM parts have distinct feature distributions
-                    if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
-                        if isinstance(feat, list):
-                            CENTER_LOSS = center_criterion(feat[0], target)
-                        else:
-                            CENTER_LOSS = center_criterion(feat, target)
-                        total_loss += cfg.SOLVER.CENTER_LOSS_WEIGHT * CENTER_LOSS
+                # Optional center loss
+                if 'center' in metric_loss_type:
+                    center_loss = _compute_center_loss(feat, target)
+                    total_loss = total_loss + cfg.SOLVER.CENTER_LOSS_WEIGHT * center_loss
 
-                    return total_loss
-                else:
-                    if isinstance(score, list):
-                        ID_LOSS = [F.cross_entropy(scor, target) for scor in score[1:]]
-                        ID_LOSS = sum(ID_LOSS) / len(ID_LOSS)
-                        ID_LOSS = 0.5 * ID_LOSS + 0.5 * F.cross_entropy(score[0], target)
-                    else:
-                        ID_LOSS = F.cross_entropy(score, target)
-
-                    if isinstance(feat, list):
-                            TRI_LOSS = [triplet(feats, target)[0] for feats in feat[1:]]
-                            TRI_LOSS = sum(TRI_LOSS) / len(TRI_LOSS)
-                            TRI_LOSS = 0.5 * TRI_LOSS + 0.5 * triplet(feat[0], target)[0]
-                    else:
-                            TRI_LOSS = triplet(feat, target)[0]
-
-                    total_loss = cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
-                               cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS
-
-                    if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
-                        if isinstance(feat, list):
-                            CENTER_LOSS = sum(center_criterion(f, target) for f in feat) / len(feat)
-                        else:
-                            CENTER_LOSS = center_criterion(feat, target)
-                        total_loss += cfg.SOLVER.CENTER_LOSS_WEIGHT * CENTER_LOSS
-
-                    return total_loss
+                return total_loss
             else:
-                print('expected METRIC_LOSS_TYPE should be triplet'
-                      'but got {}'.format(cfg.MODEL.METRIC_LOSS_TYPE))
+                print('expected METRIC_LOSS_TYPE in {triplet, triplet_center, circle, circle_center}'
+                      ' but got {}'.format(metric_loss_type))
 
     else:
-        print('expected sampler should be softmax, triplet, softmax_triplet or softmax_triplet_center'
-              'but got {}'.format(cfg.DATALOADER.SAMPLER))
+        print('expected sampler should be softmax or softmax_triplet'
+              ' but got {}'.format(sampler))
+
     return loss_func, center_criterion
-
-

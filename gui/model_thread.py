@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torchvision.transforms as T
 from PIL import Image
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, QMutex, QMutexLocker, pyqtSignal
 
 from config import cfg
 from datasets.ballshow import BallShow
@@ -15,9 +15,11 @@ from utils.metrics import R1_mAP_eval, euclidean_distance, cosine_similarity
 
 class ModelWorker:
     """
-    Singleton-like wrapper for model and dataset states
+    Singleton-like wrapper for model and dataset states.
+    Thread-safe: use the mutex when accessing shared state from multiple threads.
     """
     def __init__(self):
+        self._mutex = QMutex()
         self.cfg = cfg
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dataset = None
@@ -26,12 +28,16 @@ class ModelWorker:
         self.camera_num = 0
         self.view_num = 0
         self.val_transforms = None
-        
+
         # Gallery cache
         self.gallery_features = None
         self.gallery_paths = []
         self.gallery_pids = []
         self.gallery_cams = []
+
+    @property
+    def mutex(self):
+        return self._mutex
 
     def set_device(self, dev_str):
         self.device = dev_str
@@ -39,6 +45,7 @@ class ModelWorker:
             self.model.to(self.device)
 
     def load_config_and_model(self, config_path, weight_path, progress_callback=None):
+        locker = QMutexLocker(self._mutex)
         # 1. Defrost and load config with UTF-8 encoding (fixes Windows default encoding crash)
         if progress_callback: progress_callback("Loading config file...")
         self.cfg.defrost()
@@ -136,12 +143,18 @@ class GalleryFeatureExtractorThread(QThread):
 
     def run(self):
         try:
-            if state.model is None:
-                self.finished_signal.emit(False, "Model not loaded. Load model first.", 0)
-                return
+            # ── Check prerequisites (locked) ──────────────────────────────────
+            state.mutex.lock()
+            try:
+                if state.model is None:
+                    self.finished_signal.emit(False, "Model not loaded. Load model first.", 0)
+                    return
+                model_ref = state.model
+                gallery_data = state.dataset.gallery
+            finally:
+                state.mutex.unlock()
 
             self.log_signal.emit("Starting gallery feature extraction...")
-            gallery_data = state.dataset.gallery
             total_images = len(gallery_data)
             
             if total_images == 0:
@@ -157,6 +170,9 @@ class GalleryFeatureExtractorThread(QThread):
             batch_size = state.cfg.TEST.IMS_PER_BATCH
             
             for i in range(0, total_images, batch_size):
+                if self.isInterruptionRequested():
+                    self.log_signal.emit("Gallery extraction interrupted.")
+                    return
                 batch_data = gallery_data[i : i + batch_size]
                 imgs = []
                 batch_pids = []
@@ -198,10 +214,15 @@ class GalleryFeatureExtractorThread(QThread):
 
                 self.progress_signal.emit(min(i + batch_size, total_images), total_images)
 
-            state.gallery_features = torch.cat(features_list, dim=0)
-            state.gallery_paths = paths_list
-            state.gallery_pids = pids_list
-            state.gallery_cams = cams_list
+            # ── Store results (locked) ────────────────────────────────────────
+            state.mutex.lock()
+            try:
+                state.gallery_features = torch.cat(features_list, dim=0)
+                state.gallery_paths = paths_list
+                state.gallery_pids = pids_list
+                state.gallery_cams = cams_list
+            finally:
+                state.mutex.unlock()
 
             self.log_signal.emit(f"Gallery extraction complete. Extracted {len(paths_list)} images.")
             self.finished_signal.emit(True, "Gallery features extracted successfully!", len(paths_list))
@@ -219,12 +240,22 @@ class QuerySearchThread(QThread):
 
     def run(self):
         try:
-            if state.model is None:
-                self.finished_signal.emit(False, "Model not loaded.", [])
-                return
-            if state.gallery_features is None:
-                self.finished_signal.emit(False, "Gallery features not extracted yet.", [])
-                return
+            # ── Check prerequisites (locked) ──────────────────────────────────
+            state.mutex.lock()
+            try:
+                if state.model is None:
+                    self.finished_signal.emit(False, "Model not loaded.", [])
+                    return
+                if state.gallery_features is None:
+                    self.finished_signal.emit(False, "Gallery features not extracted yet.", [])
+                    return
+                model_ref = state.model
+                gallery_features = state.gallery_features
+                gallery_paths = list(state.gallery_paths)
+                gallery_pids = list(state.gallery_pids)
+                gallery_cams = list(state.gallery_cams)
+            finally:
+                state.mutex.unlock()
 
             self.log_signal.emit(f"Running search for query: {os.path.basename(self.query_path)}")
             
@@ -246,19 +277,19 @@ class QuerySearchThread(QThread):
             view_labels = torch.zeros(1, dtype=torch.int64).to(state.device)
 
             with torch.no_grad():
-                feat = state.model(img_tensor, cam_label=cam_labels, view_label=view_labels)
+                feat = model_ref(img_tensor, cam_label=cam_labels, view_label=view_labels)
                 feat = torch.nn.functional.normalize(feat, dim=1, p=2)
                 
                 # TTA
                 img_tensor_flip = torch.flip(img_tensor, dims=[3])
-                feat_flip = state.model(img_tensor_flip, cam_label=cam_labels, view_label=view_labels)
+                feat_flip = model_ref(img_tensor_flip, cam_label=cam_labels, view_label=view_labels)
                 feat_flip = torch.nn.functional.normalize(feat_flip, dim=1, p=2)
                 
                 feat = (feat + feat_flip) / 2.0
                 feat = torch.nn.functional.normalize(feat, dim=1, p=2)
                 
             qf = feat.cpu()
-            gf = state.gallery_features
+            gf = gallery_features
 
             # Calculate distances (Euclidean)
             distmat = euclidean_distance(qf, gf)[0]
@@ -270,9 +301,9 @@ class QuerySearchThread(QThread):
             results = []
             count = 0
             for idx in indices:
-                g_path = state.gallery_paths[idx]
-                g_pid = state.gallery_pids[idx]
-                g_cam = state.gallery_cams[idx]
+                g_path = gallery_paths[idx]
+                g_pid = gallery_pids[idx]
+                g_cam = gallery_cams[idx]
                 dist = distmat[idx]
                 
                 # Check if it is a match (same pid, but exclude same camera of same person in standard ReID if requested.
@@ -304,13 +335,19 @@ class BatchEvaluationThread(QThread):
 
     def run(self):
         try:
-            if state.model is None:
-                self.finished_signal.emit(False, 0.0, 0.0, 0.0, 0.0, "Model not loaded.")
-                return
+            # ── Check prerequisites (locked) ──────────────────────────────────
+            state.mutex.lock()
+            try:
+                if state.model is None:
+                    self.finished_signal.emit(False, 0.0, 0.0, 0.0, 0.0, "Model not loaded.")
+                    return
+                model_ref = state.model
+                query_data = state.dataset.query
+                gallery_data = state.dataset.gallery
+            finally:
+                state.mutex.unlock()
 
             self.log_signal.emit("Starting full dataset evaluation...")
-            query_data = state.dataset.query
-            gallery_data = state.dataset.gallery
             
             num_query = len(query_data)
             num_gallery = len(gallery_data)
@@ -328,6 +365,9 @@ class BatchEvaluationThread(QThread):
             
             processed = 0
             for i in range(0, len(combined_data), batch_size):
+                if self.isInterruptionRequested():
+                    self.log_signal.emit("Batch evaluation interrupted.")
+                    return
                 batch = combined_data[i : i + batch_size]
                 imgs = []
                 pids = []
@@ -346,12 +386,12 @@ class BatchEvaluationThread(QThread):
 
                 with torch.no_grad():
                     # Feature extraction
-                    feat = state.model(imgs_tensor, cam_label=cam_labels, view_label=view_labels)
+                    feat = model_ref(imgs_tensor, cam_label=cam_labels, view_label=view_labels)
                     feat = torch.nn.functional.normalize(feat, dim=1, p=2)
-                    
+
                     # TTA
                     imgs_tensor_flip = torch.flip(imgs_tensor, dims=[3])
-                    feat_flip = state.model(imgs_tensor_flip, cam_label=cam_labels, view_label=view_labels)
+                    feat_flip = model_ref(imgs_tensor_flip, cam_label=cam_labels, view_label=view_labels)
                     feat_flip = torch.nn.functional.normalize(feat_flip, dim=1, p=2)
                     
                     feat = (feat + feat_flip) / 2.0

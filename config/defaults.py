@@ -39,7 +39,7 @@ _C.MODEL.ID_LOSS_TYPE = 'softmax'
 _C.MODEL.ID_LOSS_WEIGHT = 1.0
 _C.MODEL.TRIPLET_LOSS_WEIGHT = 1.0
 
-_C.MODEL.METRIC_LOSS_TYPE = 'triplet'
+_C.MODEL.METRIC_LOSS_TYPE = 'triplet'  # options: 'triplet', 'triplet_center', 'circle', 'circle_center'
 # If train with multi-gpu ddp mode, options: 'True', 'False'
 _C.MODEL.DIST_TRAIN = False
 # If train with soft triplet loss, options: 'True', 'False'
@@ -53,6 +53,12 @@ _C.MODEL.COS_LAYER = False
 _C.MODEL.DROP_PATH = 0.1
 _C.MODEL.DROP_OUT = 0.0
 _C.MODEL.ATT_DROP_RATE = 0.0
+# Random Patch Drop probability (0 = disabled, 0.2 recommended for occlusion simulation)
+_C.MODEL.PATCH_DROP_PROB = 0.0
+# MixStyle: mix feature statistics between samples for domain generalization
+# p = probability per block, alpha = Beta distribution shape (smaller = stronger)
+_C.MODEL.MIXSTYLE_P = 0.0
+_C.MODEL.MIXSTYLE_ALPHA = 0.1
 _C.MODEL.TRANSFORMER_TYPE = 'None'
 _C.MODEL.STRIDE_SIZE = [16, 16]
 
@@ -62,6 +68,10 @@ _C.MODEL.SHIFT_NUM = 5
 _C.MODEL.SHUFFLE_GROUP = 2
 _C.MODEL.DEVIDE_LENGTH = 4
 _C.MODEL.RE_ARRANGE = True
+
+# Feature dimension compression: shared projection layer after BNNeck
+# 0 = disabled (3840-dim output). Recommended: 256 → 1280-dim, 128 → 640-dim
+_C.MODEL.PROJ_DIM = 0
 
 # SIE Parameter
 _C.MODEL.SIE_COE = 3.0
@@ -118,6 +128,8 @@ _C.DATALOADER.NUM_INSTANCE = 16
 _C.SOLVER = CN()
 # Name of optimizer
 _C.SOLVER.OPTIMIZER_NAME = "Adam"
+# Adam/AdamW betas (momentum coefficients)
+_C.SOLVER.ADAM_BETAS = (0.9, 0.999)
 # Number of max epoches
 _C.SOLVER.MAX_EPOCHS = 100
 # Base learning rate
@@ -134,7 +146,7 @@ _C.SOLVER.MOMENTUM = 0.9
 _C.SOLVER.MARGIN = 0.3
 # Learning rate of SGD to learn the centers of center loss
 _C.SOLVER.CENTER_LR = 0.5
-# Balanced weight of center loss
+# Balanced weight of center loss (only used when METRIC_LOSS_TYPE contains 'center')
 _C.SOLVER.CENTER_LOSS_WEIGHT = 0.0005
 
 # Settings of weight decay
@@ -152,8 +164,13 @@ _C.SOLVER.WARMUP_EPOCHS = 5
 # method of warm up, option: 'constant','linear'
 _C.SOLVER.WARMUP_METHOD = "linear"
 
+# Scale s and margin m for ArcFace / Cosface / AMSoftmax / Circle (ID-level classifier)
 _C.SOLVER.COSINE_MARGIN = 0.5
 _C.SOLVER.COSINE_SCALE = 30
+
+# Circle Loss parameters (used when MODEL.METRIC_LOSS_TYPE contains 'circle')
+_C.SOLVER.CIRCLE_S = 256.0   # scale factor γ
+_C.SOLVER.CIRCLE_M = 0.25    # relaxation margin m
 
 # epoch number of saving checkpoints
 _C.SOLVER.CHECKPOINT_PERIOD = 10
@@ -165,6 +182,12 @@ _C.SOLVER.EVAL_PERIOD = 10
 # This is global, so if we have 8 GPUs and IMS_PER_BATCH = 128, each GPU will
 # contain 16 images per batch
 _C.SOLVER.IMS_PER_BATCH = 64
+# Gradient clipping max norm (0 = disabled)
+_C.SOLVER.GRAD_CLIP = 0.0
+# Whether to save the best model (based on mAP)
+_C.SOLVER.EVAL_BEST = True
+# TensorBoard logging
+_C.SOLVER.TB_LOG = False
 
 # ---------------------------------------------------------------------------- #
 # TEST
@@ -175,6 +198,16 @@ _C.TEST = CN()
 _C.TEST.IMS_PER_BATCH = 128
 # If test with re-ranking, options: 'True','False'
 _C.TEST.RE_RANKING = False
+_C.TEST.RERANK_K1 = 20
+_C.TEST.RERANK_K2 = 6
+_C.TEST.RERANK_LAMBDA = 0.3
+_C.TEST.QE = False
+_C.TEST.QE_K = 10
+_C.TEST.QE_ALPHA = 3.0
+_C.TEST.QE_ITER = 1
+_C.TEST.MULTI_SCALE = False
+_C.TEST.SCALES = ([256, 128],)
+_C.TEST.SCALE_WEIGHTS = ()
 # Path to trained model
 _C.TEST.WEIGHT = ""
 # Which feature of BNNeck to be used for test, before or after BNNneck, options: 'before' or 'after'
